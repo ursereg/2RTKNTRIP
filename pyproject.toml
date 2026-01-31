@@ -1,0 +1,31 @@
+[project]
+name = "ntrip-caster"
+version = "2.2.0"
+description = "High-performance NTRIP Caster with RTCM parsing"
+requires-python = ">=3.12"
+dependencies = [
+    "flask==3.0.3",
+    "flask-socketio==5.3.6",
+    "psutil==5.9.5",
+    "pyproj>=3.6.1",
+    "pyrtcm>=1.1.0",
+    "python-socketio==5.8.0",
+    "reverse-geocode>=1.6.0",
+    "setuptools>=78.1.1",
+    "werkzeug>=3.0.6",
+]
+
+[project.scripts]
+ntrip-caster = "ntrip_caster.main:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["ntrip_caster"]
+
+[dependency-groups]
+dev = [
+    "requests>=2.32.5",
+]

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-config.py - 配置文件
-从config.ini文件读取NTRIP Caster的所有配置参数
+config.py - Configuration file
+Reads all configuration parameters for NTRIP Caster from config.ini file
 """
 
 import os
@@ -16,13 +16,13 @@ CONFIG_FILE = os.environ.get('NTRIP_CONFIG_FILE',
 config = configparser.ConfigParser()
 
 if os.path.exists(CONFIG_FILE):
-    print(f"加载配置文件: {CONFIG_FILE}")
+    print(f"Loading configuration file: {CONFIG_FILE}")
     config.read(CONFIG_FILE, encoding='utf-8')
 else:
-    raise FileNotFoundError(f"配置文件 {CONFIG_FILE} 不存在")
+    raise FileNotFoundError(f"Configuration file {CONFIG_FILE} does not exist")
 
 def get_config_value(section, key, fallback=None, value_type=str):
-    """获取配置值并转换类型"""
+    """Get configuration value and convert type"""
     try:
         if value_type == bool:
             return config.getboolean(section, key, fallback=fallback)
@@ -38,9 +38,9 @@ def get_config_value(section, key, fallback=None, value_type=str):
     except (configparser.NoSectionError, configparser.NoOptionError):
         return fallback
 
-# ==================== 基本配置 ====================
+# ==================== Basic Configuration ====================
 
-# 基本应用信息
+# Basic application information
 APP_NAME = get_config_value('app', 'name', '2RTK Ntrip Caster')
 APP_VERSION = get_config_value('app', 'version', '2.2.0')
 APP_DESCRIPTION = get_config_value('app', 'description', 'Ntrip Caster')
@@ -48,39 +48,33 @@ APP_AUTHOR = get_config_value('app', 'author', '2rtk')
 APP_CONTACT = get_config_value('app', 'contact', 'i@jia.by')
 APP_WEBSITE = get_config_value('app', 'website', 'https://2rtk.com')
 
-
 VERSION = APP_VERSION
-
 
 DEBUG = get_config_value('development', 'debug_mode', False, bool)
 
-# ==================== CASTER配置 ====================
+# ==================== CASTER Configuration ====================
 
-# NTRIP Caster地理位置信息
+# NTRIP Caster geographic information
 CASTER_COUNTRY = get_config_value('caster', 'country', 'CHN')
 CASTER_LATITUDE = get_config_value('caster', 'latitude', 25.20341154, float)
 CASTER_LONGITUDE = get_config_value('caster', 'longitude', 110.277492, float)
 
-# ==================== 网络配置 ====================
+# ==================== Network Configuration ====================
 
 def get_all_network_interfaces() -> List[Tuple[str, str]]:
-    """获取所有网络接口的IP地址"""
+    """Get IP addresses of all network interfaces"""
     interfaces = []
     
     try:
-        
         hostname = socket.gethostname()
-        
-        
         for info in socket.getaddrinfo(hostname, None):
             family, socktype, proto, canonname, sockaddr = info
-            if family == socket.AF_INET:  # 只获取IPv4地址
+            if family == socket.AF_INET:  # Only IPv4
                 ip = sockaddr[0]
-                if ip not in [addr[1] for addr in interfaces]:  # 避免重复
+                if ip not in [addr[1] for addr in interfaces]:  # Avoid duplicates
                     interfaces.append((f"Interface-{len(interfaces)+1}", ip))
     except Exception:
         pass
-    
     
     if not any(addr[1] == '127.0.0.1' for addr in interfaces):
         interfaces.append(("Loopback", "127.0.0.1"))
@@ -88,18 +82,16 @@ def get_all_network_interfaces() -> List[Tuple[str, str]]:
     return interfaces
 
 def get_private_ips() -> List[Tuple[str, str]]:
-    """获取所有内网IP地址（仅检测实际可用的IP，不强制添加回环地址）"""
+    """Get all private IP addresses"""
     private_ips = []
     
     try:
-       
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(("8.8.8.8", 80))
             primary_ip = s.getsockname()[0]
             private_ips.append(("Primary", primary_ip))
     except Exception:
         pass
-    
     
     try:
         hostname = socket.gethostname()
@@ -123,46 +115,43 @@ def get_private_ips() -> List[Tuple[str, str]]:
     
     return private_ips
 
-def get_display_urls(port: int, service_name: str = "服务") -> List[str]:
-    """获取用于显示的所有可访问URL"""
+def get_display_urls(port: int, service_name: str = "Service") -> List[str]:
+    """Get all accessible URLs for display"""
     urls = []
     
     listen_host = get_config_value('network', 'host', '0.0.0.0')
     
     if listen_host == '0.0.0.0':
-        
         for interface_name, ip in get_private_ips():
             urls.append(f"http://{ip}:{port}")
     else:
-        
         urls.append(f"http://{listen_host}:{port}")
     
     return urls
 
-# 网络配置
+# Network settings
 HOST = get_config_value('network', 'host', '0.0.0.0') 
 
-
 NTRIP_HOST = HOST  
-NTRIP_PORT = get_config_value('ntrip', 'port', 2101, int)  # NTRIP服务端口
+NTRIP_PORT = get_config_value('ntrip', 'port', 2101, int)  # NTRIP service port
 
-WEB_HOST = HOST  # Web服务监听地址
-WEB_PORT = get_config_value('web', 'port', 5757, int)      # Web服务端口
+WEB_HOST = HOST  # Web service listen address
+WEB_PORT = get_config_value('web', 'port', 5757, int)      # Web service port
 
-# 最大连接数
+# Maximum connections
 MAX_CONNECTIONS = get_config_value('network', 'max_connections', 5000, int)
 
-# 缓冲区大小
+# Buffer size
 BUFFER_SIZE = get_config_value('network', 'buffer_size', 81920, int)      # 80KB
 MAX_BUFFER_SIZE = get_config_value('network', 'max_buffer_size', 655360, int) # 640KB
 
-# ==================== 数据库配置 ====================
+# ==================== Database Configuration ====================
 
 DATABASE_PATH = get_config_value('database', 'path', '2rtk.db')
 DB_POOL_SIZE = get_config_value('database', 'pool_size', 10, int)
 DB_TIMEOUT = get_config_value('database', 'timeout', 30, int)
 
-# ==================== 日志配置 ====================
+# ==================== Logging Configuration ====================
 
 LOG_DIR = get_config_value('logging', 'log_dir', 'logs')
 LOG_FILES = {
@@ -177,71 +166,70 @@ LOG_FORMAT = get_config_value('logging', 'log_format', '%(asctime)s - %(name)s -
 
 LOG_MAX_SIZE = get_config_value('logging', 'max_log_size', 10 * 1024 * 1024, int)  # 10MB
 
-LOG_BACKUP_COUNT = get_config_value('logging', 'backup_count', 5, int)  # 保留5个备份文件
+LOG_BACKUP_COUNT = get_config_value('logging', 'backup_count', 5, int)  # Keep 5 backup files
 
 LOG_FREQUENT_STATUS = get_config_value('logging', 'log_frequent_status', False, bool)
 
-# Flask密钥 (生产环境中请修改)
+# Flask Secret Key
 SECRET_KEY = get_config_value('security', 'secret_key', '8f4a9c2e7d1b6f3a5e8d7c9b2a4f6e3d5c8b7a9f2e4d6c8b3a5f7e9d1c2b4a6')
-FLASK_SECRET_KEY = SECRET_KEY  # Flask应用密钥
+FLASK_SECRET_KEY = SECRET_KEY
 
-# 密码哈希配置
+# Password hash configuration
 PASSWORD_HASH_ROUNDS = get_config_value('security', 'password_hash_rounds', 3, int)
-SESSION_TIMEOUT = get_config_value('security', 'session_timeout', 3600, int)  # 1小时
+SESSION_TIMEOUT = get_config_value('security', 'session_timeout', 3600, int)  # 1 hour
 
-# 默认管理员账户
+# Default administrator account
 DEFAULT_ADMIN = {
     'username': get_config_value('admin', 'username', 'admin'),
     'password': get_config_value('admin', 'password', 'admin123')
 }
 
-# ==================== NTRIP协议配置 ====================
-
+# ==================== NTRIP Protocol Configuration ====================
 
 SUPPORTED_NTRIP_VERSIONS = get_config_value('ntrip', 'supported_versions', ['1.0', '2.0'], list)
 
 DEFAULT_NTRIP_VERSION = get_config_value('ntrip', 'default_version', '1.0')
 MAX_USER_CONNECTIONS_PER_MOUNT = get_config_value('ntrip', 'max_user_connections_per_mount', 3000, int)
-MAX_USERS_PER_MOUNT = get_config_value('ntrip', 'max_users_per_mount', 3000, int)  # 每个挂载点每个用户的最大连接数
-MAX_CONNECTIONS_PER_USER = get_config_value('ntrip', 'max_connections_per_user', 3, int)  # 每个用户的最大连接数
-MOUNT_TIMEOUT = get_config_value('ntrip', 'mount_timeout', 1800, int)  # 30分钟
-CLIENT_TIMEOUT = get_config_value('ntrip', 'client_timeout', 300, int)  # 5分钟
-CONNECTION_TIMEOUT = get_config_value('ntrip', 'connection_timeout', 1800, int)  # 连接超时时间 (秒)
+MAX_USERS_PER_MOUNT = get_config_value('ntrip', 'max_users_per_mount', 3000, int)
+MAX_CONNECTIONS_PER_USER = get_config_value('ntrip', 'max_connections_per_user', 3, int)
+MOUNT_TIMEOUT = get_config_value('ntrip', 'mount_timeout', 1800, int)  # 30 minutes
+CLIENT_TIMEOUT = get_config_value('ntrip', 'client_timeout', 300, int)  # 5 minutes
+CONNECTION_TIMEOUT = get_config_value('ntrip', 'connection_timeout', 1800, int)  # Connection timeout (seconds)
 
-# ==================== TCP配置 ====================
+# ==================== TCP Configuration ====================
 
-# TCP Keep-Alive配置
+# TCP Keep-Alive Configuration
 TCP_KEEPALIVE = {
     'enabled': get_config_value('tcp', 'keepalive_enabled', True, bool),
-    'idle': get_config_value('tcp', 'keepalive_idle', 60, int),      # 开始发送keep-alive探测前的空闲时间
-    'interval': get_config_value('tcp', 'keepalive_interval', 10, int),  # keep-alive探测间隔
-    'count': get_config_value('tcp', 'keepalive_count', 3, int)       # 最大keep-alive探测次数
+    'idle': get_config_value('tcp', 'keepalive_idle', 60, int),
+    'interval': get_config_value('tcp', 'keepalive_interval', 10, int),
+    'count': get_config_value('tcp', 'keepalive_count', 3, int)
 }
 SOCKET_TIMEOUT = get_config_value('tcp', 'socket_timeout', 120, int)
 
-# ==================== 数据转发配置 ====================
+# ==================== Data Forwarding Configuration ====================
 
-# 环形缓冲区配置
-RING_BUFFER_SIZE = get_config_value('data_forwarding', 'ring_buffer_size', 60, int)  # 缓冲区大小
+# Ring buffer configuration
+RING_BUFFER_SIZE = get_config_value('data_forwarding', 'ring_buffer_size', 60, int)
 
-BROADCAST_INTERVAL = get_config_value('data_forwarding', 'broadcast_interval', 0.01, float)  # 广播间隔 (秒)
+BROADCAST_INTERVAL = get_config_value('data_forwarding', 'broadcast_interval', 0.01, float)
 
-DATA_SEND_TIMEOUT = get_config_value('data_forwarding', 'data_send_timeout', 5, int)  # 数据发送超时时间（秒）
+DATA_SEND_TIMEOUT = get_config_value('data_forwarding', 'data_send_timeout', 5, int)
 
-CLIENT_HEALTH_CHECK_INTERVAL = get_config_value('data_forwarding', 'client_health_check_interval', 120, int)  # 客户端健康检查间隔（秒）
+CLIENT_HEALTH_CHECK_INTERVAL = get_config_value('data_forwarding', 'client_health_check_interval', 120, int)
 
-# ==================== RTCM解析 ====================
+# ==================== RTCM Parsing ====================
 
-# RTCM解析间隔（秒）
+# RTCM parsing interval (seconds)
 RTCM_PARSE_INTERVAL = get_config_value('rtcm', 'parse_interval', 5, int)
 
-# RTCM缓冲区大小
+# RTCM buffer size
 RTCM_BUFFER_SIZE = get_config_value('rtcm', 'buffer_size', 1000, int)
 
-# RTCM数据解析时长（秒）- 用于修正STR表
+# RTCM data parsing duration (seconds) - used to correct STR table
 RTCM_PARSE_DURATION = get_config_value('rtcm', 'parse_duration', 30, int)
 
-# RTCM消息类型描述字典
+# RTCM message type descriptions
 RTCM_MESSAGE_DESCRIPTIONS = {
     1001: "L1-Only GPS RTK Observables",
     1002: "Extended L1-Only GPS RTK Observables", 
@@ -273,24 +261,22 @@ RTCM_MESSAGE_DESCRIPTIONS = {
     1127: "BeiDou MSM7"
 }
 
-# ==================== Web界面配置 ====================
+# ==================== Web Interface Configuration ====================
 
-# WebSocket配置
+# WebSocket Configuration
 WEBSOCKET_CONFIG = {
-    # 'cors_allowed_origins': get_config_value('websocket', 'cors_allowed_origins', '*'),  # 已移除CORS功能
     'ping_timeout': get_config_value('websocket', 'ping_timeout', 120, int),
     'ping_interval': get_config_value('websocket', 'ping_interval', 15, int)
 }
 WEBSOCKET_ENABLED = get_config_value('websocket', 'enabled', True, bool)
 
-# 实时数据推送间隔 (秒)
+# Real-time data push interval (seconds)
 REALTIME_PUSH_INTERVAL = get_config_value('web', 'realtime_push_interval', 3, int)
-
 
 PAGE_REFRESH_INTERVAL = get_config_value('web', 'page_refresh_interval', 30, int)
 
-# ==================== 预留 ====================
-# 支付二维码URL
+# ==================== Reserved ====================
+# Payment QR Code URLs
 PAYMENT_QR_CODES = {
     'alipay': get_config_value('payment', 'alipay_qr_code', ''),
     'wechat': get_config_value('payment', 'wechat_qr_code', '')
@@ -299,7 +285,7 @@ PAYMENT_QR_CODES = {
 ALIPAY_QR_URL = PAYMENT_QR_CODES['alipay']
 WECHAT_QR_URL = PAYMENT_QR_CODES['wechat']
 
-# 线程池配置
+# Performance configuration
 THREAD_POOL_SIZE = get_config_value('performance', 'thread_pool_size', 5000, int)
 MAX_WORKERS = get_config_value('performance', 'max_workers', 5000, int)
 CONNECTION_QUEUE_SIZE = get_config_value('performance', 'connection_queue_size', 5000, int)
@@ -311,79 +297,64 @@ CPU_WARNING_THRESHOLD = get_config_value('performance', 'cpu_warning_threshold',
 MEMORY_WARNING_THRESHOLD = get_config_value('performance', 'memory_warning_threshold', 80, int)
 
 def load_from_env():
-    """从环境变量加载配置"""
+    """Load configuration from environment variables"""
     global NTRIP_PORT, WEB_PORT, DEBUG, DATABASE_PATH
     
-    # NTRIP端口
     if 'NTRIP_PORT' in os.environ:
         try:
             NTRIP_PORT = int(os.environ['NTRIP_PORT'])
         except ValueError:
             pass
     
-    # Web端口
     if 'WEB_PORT' in os.environ:
         try:
             WEB_PORT = int(os.environ['WEB_PORT'])
         except ValueError:
             pass
     
-    # 调试模式
     if 'DEBUG' in os.environ:
         DEBUG = os.environ['DEBUG'].lower() in ('true', '1', 'yes', 'on')
     
-    # 数据库路径
     if 'DATABASE_PATH' in os.environ:
         DATABASE_PATH = os.environ['DATABASE_PATH']
     
-    # 密钥
     if 'SECRET_KEY' in os.environ:
         global SECRET_KEY
         SECRET_KEY = os.environ['SECRET_KEY']
 
-# ==================== 配置验证 ====================
+# ==================== Configuration Validation ====================
 
 def validate_config():
-    """验证配置参数的有效性"""
+    """Validate configuration parameters"""
     errors = []
     
-    # 验证端口范围
     if not (1024 <= NTRIP_PORT <= 65535):
-        errors.append(f"NTRIP端口 {NTRIP_PORT} 不在有效范围内 (1024-65535)")
+        errors.append(f"NTRIP port {NTRIP_PORT} is out of valid range (1024-65535)")
     
     if not (1024 <= WEB_PORT <= 65535):
-        errors.append(f"Web端口 {WEB_PORT} 不在有效范围内 (1024-65535)")
+        errors.append(f"Web port {WEB_PORT} is out of valid range (1024-65535)")
     
-    # 验证缓冲区大小
     if BUFFER_SIZE <= 0 or BUFFER_SIZE > MAX_BUFFER_SIZE:
-        errors.append(f"缓冲区大小 {BUFFER_SIZE} 无效")
+        errors.append(f"Buffer size {BUFFER_SIZE} is invalid")
     
-    # 验证日志目录
     if not os.path.exists(LOG_DIR):
         try:
             os.makedirs(LOG_DIR)
         except Exception as e:
-            errors.append(f"无法创建日志目录 {LOG_DIR}: {e}")
+            errors.append(f"Cannot create log directory {LOG_DIR}: {e}")
     
     return errors
 
-
 def init_config():
-    """初始化配置"""
-    
+    """Initialize configuration"""
     load_from_env()
-    
     errors = validate_config()
     if errors:
-        # print("配置验证失败:")
-    # for error in errors:
-    #     print(f"  - {error}")
         return False
-    
     return True
 
 def get_config_dict():
-    """获取配置字典，用于调试"""
+    """Get configuration dictionary for debugging"""
     return {
         'version': VERSION,
         'app_name': APP_NAME,
@@ -400,4 +371,3 @@ def get_config_dict():
         'ring_buffer_size': RING_BUFFER_SIZE,
         'rtcm_parse_interval': RTCM_PARSE_INTERVAL
     }
-    #雪碧+咖啡=不好喝~！

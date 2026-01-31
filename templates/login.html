@@ -122,7 +122,7 @@
     <script>
         let isSubmitting = false;
         
-        // 页面加载时检查重定向参数
+        // Check redirect parameters on page load
         window.addEventListener('DOMContentLoaded', function() {
             const urlParams = new URLSearchParams(window.location.search);
             const redirectPage = urlParams.get('redirect');
@@ -134,8 +134,8 @@
                     'mounts': 'Mount Point Management',
                     'settings': 'System Settings'
                 };
-                const pageName = pageNames[redirectPage] || 'Management Function';
-                messageElement.textContent = `Access to ${pageName} requires administrator account login, please login`;
+                const pageName = pageNames[redirectPage] || 'Management function';
+                messageElement.textContent = `Access to ${pageName} requires administrator login`;
             }
         });
         
@@ -147,9 +147,7 @@
             input.classList.remove('field-error');
             error.textContent = '';
             
-            if (value.length === 0) {
-                return false;
-            }
+            if (value.length === 0) return false;
             
             if (value.length < 3) {
                 input.classList.add('field-error');
@@ -183,9 +181,7 @@
             input.classList.remove('field-error');
             error.textContent = '';
             
-            if (value.length === 0) {
-                return false;
-            }
+            if (value.length === 0) return false;
             
             if (value.length < 6) {
                 input.classList.add('field-error');
@@ -216,7 +212,6 @@
                 return false;
             }
             
-            // 防止重复提交
             isSubmitting = true;
             const submitBtn = document.getElementById('loginBtn');
             submitBtn.disabled = true;
