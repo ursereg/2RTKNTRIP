@@ -23,8 +23,8 @@ def client(app):
 def test_api_login(client):
     # Test successful login
     response = client.post('/api/login',
-                           json={'username': config.DEFAULT_ADMIN['username'],
-                                 'password': config.DEFAULT_ADMIN['password']})
+                           json={'username': config.settings.admin.username,
+                                 'password': config.settings.admin.password})
     assert response.status_code == 200
     assert response.get_json()['success'] is True
 
@@ -36,8 +36,8 @@ def test_api_login(client):
 def test_api_add_user(client):
     # Login first
     client.post('/api/login',
-                json={'username': config.DEFAULT_ADMIN['username'],
-                      'password': config.DEFAULT_ADMIN['password']})
+                json={'username': config.settings.admin.username,
+                      'password': config.settings.admin.password})
 
     # Add user
     response = client.post('/api/users',
@@ -54,8 +54,8 @@ def test_api_add_user(client):
 def test_api_add_mount(client):
     # Login first
     client.post('/api/login',
-                json={'username': config.DEFAULT_ADMIN['username'],
-                      'password': config.DEFAULT_ADMIN['password']})
+                json={'username': config.settings.admin.username,
+                      'password': config.settings.admin.password})
 
     # Add mount
     response = client.post('/api/mounts',

@@ -9,8 +9,8 @@ from ntrip_caster.database import init_db
 def temp_db():
     """Fixture for a temporary database"""
     fd, path = tempfile.mkstemp()
-    original_db_path = config.DATABASE_PATH
-    config.DATABASE_PATH = path
+    original_db_path = config.settings.database.path
+    config.settings.database.path = path
 
     # Initialize the database
     init_db()
@@ -21,7 +21,7 @@ def temp_db():
     os.close(fd)
     if os.path.exists(path):
         os.remove(path)
-    config.DATABASE_PATH = original_db_path
+    config.settings.database.path = original_db_path
 
 @pytest.fixture
 def db_conn(temp_db):

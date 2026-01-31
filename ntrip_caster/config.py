@@ -185,110 +185,7 @@ def load_settings() -> Settings:
 
 settings = load_settings()
 
-def update_globals():
-    """Update global variables from settings object"""
-    global APP_NAME, APP_VERSION, APP_DESCRIPTION, APP_AUTHOR, APP_CONTACT, APP_WEBSITE, VERSION
-    global DEBUG, CASTER_COUNTRY, CASTER_LATITUDE, CASTER_LONGITUDE, HOST, NTRIP_HOST, NTRIP_PORT
-    global WEB_HOST, WEB_PORT, MAX_CONNECTIONS, BUFFER_SIZE, MAX_BUFFER_SIZE, DATABASE_PATH
-    global DB_POOL_SIZE, DB_TIMEOUT, LOG_DIR, LOG_FILES, LOG_LEVEL, LOG_FORMAT, LOG_MAX_SIZE
-    global LOG_BACKUP_COUNT, LOG_FREQUENT_STATUS, SECRET_KEY, FLASK_SECRET_KEY, PASSWORD_HASH_ROUNDS
-    global SESSION_TIMEOUT, DEFAULT_ADMIN, SUPPORTED_NTRIP_VERSIONS, DEFAULT_NTRIP_VERSION
-    global MAX_USER_CONNECTIONS_PER_MOUNT, MAX_USERS_PER_MOUNT, MAX_CONNECTIONS_PER_USER
-    global MOUNT_TIMEOUT, CLIENT_TIMEOUT, CONNECTION_TIMEOUT, TCP_KEEPALIVE, SOCKET_TIMEOUT
-    global RING_BUFFER_SIZE, BROADCAST_INTERVAL, DATA_SEND_TIMEOUT, CLIENT_HEALTH_CHECK_INTERVAL
-    global RTCM_PARSE_INTERVAL, RTCM_BUFFER_SIZE, RTCM_PARSE_DURATION, WEBSOCKET_CONFIG, WEBSOCKET_ENABLED
-    global REALTIME_PUSH_INTERVAL, PAGE_REFRESH_INTERVAL, PAYMENT_QR_CODES, ALIPAY_QR_URL, WECHAT_QR_URL
-    global THREAD_POOL_SIZE, MAX_WORKERS, CONNECTION_QUEUE_SIZE, MAX_MEMORY_USAGE, CPU_WARNING_THRESHOLD
-    global MEMORY_WARNING_THRESHOLD
-
-    APP_NAME = settings.app.name
-    APP_VERSION = settings.app.version
-    APP_DESCRIPTION = settings.app.description
-    APP_AUTHOR = settings.app.author
-    APP_CONTACT = settings.app.contact
-    APP_WEBSITE = settings.app.website
-    VERSION = APP_VERSION
-    DEBUG = settings.development.debug_mode
-    CASTER_COUNTRY = settings.caster.country
-    CASTER_LATITUDE = settings.caster.latitude
-    CASTER_LONGITUDE = settings.caster.longitude
-    HOST = settings.network.host
-    NTRIP_HOST = HOST
-    NTRIP_PORT = settings.ntrip.port
-    WEB_HOST = HOST
-    WEB_PORT = settings.web.port
-    MAX_CONNECTIONS = settings.network.max_connections
-    BUFFER_SIZE = settings.network.buffer_size
-    MAX_BUFFER_SIZE = settings.network.max_buffer_size
-    DATABASE_PATH = settings.database.path
-    DB_POOL_SIZE = settings.database.pool_size
-    DB_TIMEOUT = settings.database.timeout
-    LOG_DIR = settings.logging.log_dir
-    LOG_FILES = {
-        'main': settings.logging.main_log_file,
-        'ntrip': settings.logging.ntrip_log_file,
-        'errors': settings.logging.error_log_file
-    }
-    LOG_LEVEL = settings.logging.log_level
-    LOG_FORMAT = settings.logging.log_format
-    LOG_MAX_SIZE = settings.logging.max_log_size
-    LOG_BACKUP_COUNT = settings.logging.backup_count
-    LOG_FREQUENT_STATUS = settings.logging.log_frequent_status
-    SECRET_KEY = settings.security.secret_key
-    FLASK_SECRET_KEY = SECRET_KEY
-    PASSWORD_HASH_ROUNDS = settings.security.password_hash_rounds
-    SESSION_TIMEOUT = settings.security.session_timeout
-    DEFAULT_ADMIN = {
-        'username': settings.admin.username,
-        'password': settings.admin.password
-    }
-    SUPPORTED_NTRIP_VERSIONS = settings.ntrip.supported_versions
-    DEFAULT_NTRIP_VERSION = settings.ntrip.default_version
-    MAX_USER_CONNECTIONS_PER_MOUNT = settings.ntrip.max_user_connections_per_mount
-    MAX_USERS_PER_MOUNT = settings.ntrip.max_users_per_mount
-    MAX_CONNECTIONS_PER_USER = settings.ntrip.max_connections_per_user
-    MOUNT_TIMEOUT = settings.ntrip.mount_timeout
-    CLIENT_TIMEOUT = settings.ntrip.client_timeout
-    CONNECTION_TIMEOUT = settings.ntrip.connection_timeout
-    TCP_KEEPALIVE = {
-        'enabled': settings.tcp.keepalive_enabled,
-        'idle': settings.tcp.keepalive_idle,
-        'interval': settings.tcp.keepalive_interval,
-        'count': settings.tcp.keepalive_count
-    }
-    SOCKET_TIMEOUT = settings.tcp.socket_timeout
-    RING_BUFFER_SIZE = settings.data_forwarding.ring_buffer_size
-    BROADCAST_INTERVAL = settings.data_forwarding.broadcast_interval
-    DATA_SEND_TIMEOUT = settings.data_forwarding.data_send_timeout
-    CLIENT_HEALTH_CHECK_INTERVAL = settings.data_forwarding.client_health_check_interval
-    RTCM_PARSE_INTERVAL = settings.rtcm.parse_interval
-    RTCM_BUFFER_SIZE = settings.rtcm.buffer_size
-    RTCM_PARSE_DURATION = settings.rtcm.parse_duration
-    WEBSOCKET_CONFIG = {
-        'ping_timeout': settings.websocket.ping_timeout,
-        'ping_interval': settings.websocket.ping_interval
-    }
-    WEBSOCKET_ENABLED = settings.websocket.enabled
-    REALTIME_PUSH_INTERVAL = settings.web.realtime_push_interval
-    PAGE_REFRESH_INTERVAL = settings.web.page_refresh_interval
-    PAYMENT_QR_CODES = {
-        'alipay': settings.payment.alipay_qr_code,
-        'wechat': settings.payment.wechat_qr_code
-    }
-    ALIPAY_QR_URL = PAYMENT_QR_CODES['alipay']
-    WECHAT_QR_URL = PAYMENT_QR_CODES['wechat']
-    THREAD_POOL_SIZE = settings.performance.thread_pool_size
-    MAX_WORKERS = settings.performance.max_workers
-    CONNECTION_QUEUE_SIZE = settings.performance.connection_queue_size
-    MAX_MEMORY_USAGE = settings.performance.max_memory_usage
-    CPU_WARNING_THRESHOLD = settings.performance.cpu_warning_threshold
-    MEMORY_WARNING_THRESHOLD = settings.performance.memory_warning_threshold
-
-# Initialize globals
-update_globals()
-
-# ==================== Exported Globals ====================
-# (They are already defined and initialized above via update_globals)
+# ==================== RTCM Descriptions ====================
 
 RTCM_MESSAGE_DESCRIPTIONS = {
     1001: "L1-Only GPS RTK Observables",
@@ -395,19 +292,22 @@ def load_from_env():
     """
     Load configuration from environment variables.
     Note: Pydantic Settings already handles environment variables.
-    This function refreshes the settings and updates globals.
+    This function refreshes the settings.
     """
     global settings
-    # We can't easily re-read the file here without re-running load_settings
-    # but we can rely on Pydantic Settings to pick up environment variables.
-    # For compatibility with the old load_from_env, we'll manually check the same vars
-    # if they are not picked up by the prefix.
     
+    # Check for legacy env vars
     new_data = {}
     if 'NTRIP_PORT' in os.environ:
-        new_data.setdefault('ntrip', {})['port'] = os.environ['NTRIP_PORT']
+        try:
+            new_data.setdefault('ntrip', {})['port'] = int(os.environ['NTRIP_PORT'])
+        except ValueError:
+            pass
     if 'WEB_PORT' in os.environ:
-        new_data.setdefault('web', {})['port'] = os.environ['WEB_PORT']
+        try:
+            new_data.setdefault('web', {})['port'] = int(os.environ['WEB_PORT'])
+        except ValueError:
+            pass
     if 'DEBUG' in os.environ:
         new_data.setdefault('development', {})['debug_mode'] = os.environ['DEBUG'].lower() in ('true', '1', 'yes', 'on')
     if 'DATABASE_PATH' in os.environ:
@@ -417,32 +317,29 @@ def load_from_env():
 
     if new_data:
         # Update existing settings with new env data
-        # This is a bit tricky with nested models, but for these few it's okay
         for section, values in new_data.items():
             section_model = getattr(settings, section)
             for k, v in values.items():
                 setattr(section_model, k, v)
 
-    update_globals()
-
 def validate_config():
     """Validate configuration parameters"""
     errors = []
     
-    if not (1024 <= NTRIP_PORT <= 65535):
-        errors.append(f"NTRIP port {NTRIP_PORT} is out of valid range (1024-65535)")
+    if not (1024 <= settings.ntrip.port <= 65535):
+        errors.append(f"NTRIP port {settings.ntrip.port} is out of valid range (1024-65535)")
     
-    if not (1024 <= WEB_PORT <= 65535):
-        errors.append(f"Web port {WEB_PORT} is out of valid range (1024-65535)")
+    if not (1024 <= settings.web.port <= 65535):
+        errors.append(f"Web port {settings.web.port} is out of valid range (1024-65535)")
     
-    if BUFFER_SIZE <= 0 or BUFFER_SIZE > MAX_BUFFER_SIZE:
-        errors.append(f"Buffer size {BUFFER_SIZE} is invalid")
+    if settings.network.buffer_size <= 0 or settings.network.buffer_size > settings.network.max_buffer_size:
+        errors.append(f"Buffer size {settings.network.buffer_size} is invalid")
     
-    if not os.path.exists(LOG_DIR):
+    if not os.path.exists(settings.logging.log_dir):
         try:
-            os.makedirs(LOG_DIR)
+            os.makedirs(settings.logging.log_dir)
         except Exception as e:
-            errors.append(f"Cannot create log directory {LOG_DIR}: {e}")
+            errors.append(f"Cannot create log directory {settings.logging.log_dir}: {e}")
     
     return errors
 
@@ -457,18 +354,23 @@ def init_config():
 def get_config_dict():
     """Get configuration dictionary for debugging"""
     return {
-        'version': VERSION,
-        'app_name': APP_NAME,
-        'debug': DEBUG,
-        'ntrip_host': NTRIP_HOST,
-        'ntrip_port': NTRIP_PORT,
-        'web_host': WEB_HOST,
-        'web_port': WEB_PORT,
-        'max_connections': MAX_CONNECTIONS,
-        'buffer_size': BUFFER_SIZE,
-        'database_path': DATABASE_PATH,
-        'log_level': LOG_LEVEL,
-        'tcp_keepalive': TCP_KEEPALIVE,
-        'ring_buffer_size': RING_BUFFER_SIZE,
-        'rtcm_parse_interval': RTCM_PARSE_INTERVAL
+        'version': settings.app.version,
+        'app_name': settings.app.name,
+        'debug': settings.development.debug_mode,
+        'ntrip_host': settings.network.host,
+        'ntrip_port': settings.ntrip.port,
+        'web_host': settings.network.host,
+        'web_port': settings.web.port,
+        'max_connections': settings.network.max_connections,
+        'buffer_size': settings.network.buffer_size,
+        'database_path': settings.database.path,
+        'log_level': settings.logging.log_level,
+        'tcp_keepalive': {
+            'enabled': settings.tcp.keepalive_enabled,
+            'idle': settings.tcp.keepalive_idle,
+            'interval': settings.tcp.keepalive_interval,
+            'count': settings.tcp.keepalive_count
+        },
+        'ring_buffer_size': settings.data_forwarding.ring_buffer_size,
+        'rtcm_parse_interval': settings.rtcm.parse_interval
     }

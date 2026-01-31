@@ -31,7 +31,7 @@ def verify_password(stored_password, provided_password):
 def init_db():
     """Initialize SQLite database schema"""
     with db_lock:
-        conn = sqlite3.connect(config.DATABASE_PATH)
+        conn = sqlite3.connect(config.settings.database.path)
         c = conn.cursor()
 
         # Admins table
@@ -68,8 +68,8 @@ def init_db():
         c.execute("SELECT * FROM admins")
         if not c.fetchone():
             # Store default admin password with hash
-            admin_username = config.DEFAULT_ADMIN['username']
-            admin_password = config.DEFAULT_ADMIN['password']
+            admin_username = config.settings.admin.username
+            admin_password = config.settings.admin.password
             hashed_password = hash_password(admin_password)
             c.execute("INSERT INTO admins (username, password) VALUES (?, ?)", (admin_username, hashed_password))
             print(f"Default admin created: {admin_username}/{admin_password} (Please change after first login)")
@@ -89,7 +89,7 @@ def verify_mount_and_user(mount, username=None, password=None, mount_password=No
         protocol_version: NTRIP protocol version
     """
     with db_lock:
-        conn = sqlite3.connect(config.DATABASE_PATH)
+        conn = sqlite3.connect(config.settings.database.path)
         c = conn.cursor()
         
         try:
@@ -154,7 +154,7 @@ def verify_mount_and_user(mount, username=None, password=None, mount_password=No
 def add_user(username, password):
     """Add new user to database"""
     with db_lock:
-        conn = sqlite3.connect(config.DATABASE_PATH)
+        conn = sqlite3.connect(config.settings.database.path)
         c = conn.cursor()
         try:
             # Check if user already exists
@@ -177,7 +177,7 @@ def add_user(username, password):
 def update_user(user_id, username, password):
     """Update user information"""
     with db_lock:
-        conn = sqlite3.connect(config.DATABASE_PATH)
+        conn = sqlite3.connect(config.settings.database.path)
         c = conn.cursor()
         try:
             # Check for username conflict
@@ -206,7 +206,7 @@ def update_user(user_id, username, password):
 def delete_user(user_id):
     """Delete user"""
     with db_lock:
-        conn = sqlite3.connect(config.DATABASE_PATH)
+        conn = sqlite3.connect(config.settings.database.path)
         c = conn.cursor()
         try:
             c.execute("SELECT username FROM users WHERE id = ?", (user_id,))
@@ -239,7 +239,7 @@ def delete_user(user_id):
 def get_all_users():
     """Get all users list"""
     with db_lock:
-        conn = sqlite3.connect(config.DATABASE_PATH)
+        conn = sqlite3.connect(config.settings.database.path)
         c = conn.cursor()
         try:
             c.execute("SELECT id, username, password FROM users")
@@ -250,7 +250,7 @@ def get_all_users():
 def update_user_password(username, new_password):
     """Update user password"""
     with db_lock:
-        conn = sqlite3.connect(config.DATABASE_PATH)
+        conn = sqlite3.connect(config.settings.database.path)
         c = conn.cursor()
         try:
             c.execute("SELECT id FROM users WHERE username = ?", (username,))
@@ -272,7 +272,7 @@ def update_user_password(username, new_password):
 def add_mount(mount, password, user_id=None):
     """Add new mount point"""
     with db_lock:
-        conn = sqlite3.connect(config.DATABASE_PATH)
+        conn = sqlite3.connect(config.settings.database.path)
         c = conn.cursor()
         try:
             c.execute("SELECT * FROM mounts WHERE mount = ?", (mount,))
@@ -298,7 +298,7 @@ def add_mount(mount, password, user_id=None):
 def update_mount(mount_id, mount=None, password=None, user_id=None):
     """Update mount point information"""
     with db_lock:
-        conn = sqlite3.connect(config.DATABASE_PATH)
+        conn = sqlite3.connect(config.settings.database.path)
         c = conn.cursor()
         try:
             c.execute("SELECT mount, password, user_id FROM mounts WHERE id = ?", (mount_id,))
@@ -336,7 +336,7 @@ def update_mount(mount_id, mount=None, password=None, user_id=None):
 def delete_mount(mount_id):
     """Delete mount point"""
     with db_lock:
-        conn = sqlite3.connect(config.DATABASE_PATH)
+        conn = sqlite3.connect(config.settings.database.path)
         c = conn.cursor()
         try:
             c.execute("SELECT mount FROM mounts WHERE id = ?", (mount_id,))
@@ -358,7 +358,7 @@ def delete_mount(mount_id):
 def get_all_mounts():
     """Get all mount points list"""
     with db_lock:
-        conn = sqlite3.connect(config.DATABASE_PATH)
+        conn = sqlite3.connect(config.settings.database.path)
         c = conn.cursor()
         try:
             c.execute("PRAGMA table_info(mounts)")
@@ -379,7 +379,7 @@ def get_all_mounts():
 def verify_admin(username, password):
     """Verify admin credentials"""
     with db_lock:
-        conn = sqlite3.connect(config.DATABASE_PATH)
+        conn = sqlite3.connect(config.settings.database.path)
         c = conn.cursor()
         try:
             c.execute("SELECT password FROM admins WHERE username = ?", (username,))
@@ -393,7 +393,7 @@ def verify_admin(username, password):
 def update_admin_password(username, new_password):
     """Update admin password"""
     with db_lock:
-        conn = sqlite3.connect(config.DATABASE_PATH)
+        conn = sqlite3.connect(config.settings.database.path)
         c = conn.cursor()
         try:
             hashed_password = hash_password(new_password)
@@ -449,7 +449,7 @@ class DatabaseManager:
     
     def get_user_password(self, username):
         """Get user password, used for Digest authentication"""
-        with sqlite3.connect(config.DATABASE_PATH) as conn:
+        with sqlite3.connect(config.settings.database.path) as conn:
             c = conn.cursor()
             c.execute("SELECT password FROM users WHERE username = ?", (username,))
             result = c.fetchone()
@@ -457,14 +457,14 @@ class DatabaseManager:
     
     def check_mount_exists_in_db(self, mount):
         """Check if mount point exists in database"""
-        with sqlite3.connect(config.DATABASE_PATH) as conn:
+        with sqlite3.connect(config.settings.database.path) as conn:
             c = conn.cursor()
             c.execute("SELECT id FROM mounts WHERE mount = ?", (mount,))
             return c.fetchone() is not None
     
     def verify_download_user(self, mount, username, password):
         """Verify download user, checks username/password, ignores mount binding"""
-        with sqlite3.connect(config.DATABASE_PATH) as conn:
+        with sqlite3.connect(config.settings.database.path) as conn:
             c = conn.cursor()
             
             c.execute("SELECT id FROM mounts WHERE mount = ?", (mount,))
@@ -495,7 +495,7 @@ class DatabaseManager:
     def update_mount_password(self, mount, new_password):
         """Update mount point password"""
         with db_lock:
-            conn = sqlite3.connect(config.DATABASE_PATH)
+            conn = sqlite3.connect(config.settings.database.path)
             c = conn.cursor()
             try:
                 c.execute("UPDATE mounts SET password = ? WHERE mount = ?", (new_password, mount))

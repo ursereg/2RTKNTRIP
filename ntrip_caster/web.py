@@ -51,14 +51,14 @@ class WebManager:
         
         # Create Flask application
         self.app = Flask(__name__, static_folder=self.static_dir, static_url_path='/static')
-        self.app.secret_key = config.FLASK_SECRET_KEY
+        self.app.secret_key = config.settings.security.secret_key
         
         # Create SocketIO instance
         self.socketio = SocketIO(
             self.app, 
             async_mode='threading',
-            ping_timeout=config.WEBSOCKET_CONFIG['ping_timeout'],
-            ping_interval=config.WEBSOCKET_CONFIG['ping_interval']
+            ping_timeout=config.settings.websocket.ping_timeout,
+            ping_interval=config.settings.websocket.ping_interval
         )
         
         # Register routes and SocketIO events
@@ -122,16 +122,16 @@ class WebManager:
         @self.app.route('/')
         def index():
             """Main index - SPA Application"""
-            app_name = config.get_config_value('app', 'name', '2RTK NTRIP Caster')
-            app_version = config.get_config_value('app', 'version', config.APP_VERSION)
+            app_name = config.settings.app.name
+            app_version = config.settings.app.version
             current_year = datetime.now().year
             
             return self._load_template('spa.html', 
                                      app_name=app_name,
                                      app_version=app_version,
                                      current_year=current_year,
-                                     contact_email='i@jia.by',
-                                     website_url='2RTK.COM')
+                                     contact_email=config.settings.app.contact,
+                                     website_url=config.settings.app.website)
         
         @self.app.route('/login', methods=['GET', 'POST'])
         def login():
@@ -271,12 +271,12 @@ class WebManager:
             """Get application info"""
             try:
                 return jsonify({
-                    'name': config.APP_NAME,
-                    'version': config.APP_VERSION,
-                    'description': config.APP_DESCRIPTION,
-                    'author': config.APP_AUTHOR,
-                    'contact': config.APP_CONTACT,
-                    'website': config.APP_WEBSITE
+                    'name': config.settings.app.name,
+                    'version': config.settings.app.version,
+                    'description': config.settings.app.description,
+                    'author': config.settings.app.author,
+                    'contact': config.settings.app.contact,
+                    'website': config.settings.app.website
                 })
             except Exception as e:
                 log_error(f"Failed to get app info: {e}")
@@ -328,7 +328,7 @@ class WebManager:
                 try:
                     data = request.get_json()
                     new_password, new_username = data.get('password', '').strip(), data.get('username', '').strip()
-                    if username == config.DEFAULT_ADMIN['username']:
+                    if username == config.settings.admin.username:
                         if new_username: return jsonify({'error': 'Admin username cannot be changed'}), 400
                         if not new_password: return jsonify({'error': 'New password required'}), 400
                         success = self.db_manager.update_admin_password(username, new_password)
@@ -529,7 +529,7 @@ class WebManager:
                 self.socketio.emit('online_mounts_update', {'mounts': cm.get_online_mounts(), 'timestamp': time.time()}, to='data_push')
                 self.socketio.emit('str_data_update', {'str_data': cm.get_all_str_data(), 'timestamp': time.time()}, to='data_push')
                 
-                time.sleep(config.REALTIME_PUSH_INTERVAL)
+                time.sleep(config.settings.web.realtime_push_interval)
             except Exception as e:
                 log_error(f"Data push exception: {e}", exc_info=True)
                 time.sleep(1)
@@ -543,7 +543,7 @@ class WebManager:
     
     def run(self, host=None, port=None, debug=None):
         """Start Web server"""
-        self.socketio.run(self.app, host=host or config.HOST, port=port or config.WEB_PORT, debug=debug if debug is not None else config.DEBUG, allow_unsafe_werkzeug=True)
+        self.socketio.run(self.app, host=host or config.settings.network.host, port=port or config.settings.web.port, debug=debug if debug is not None else config.settings.development.debug_mode, allow_unsafe_werkzeug=True)
 
 def create_web_manager(db_manager, data_forwarder, start_time):
     """Create Web Manager instance"""

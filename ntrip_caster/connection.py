@@ -144,8 +144,9 @@ class ConnectionManager:
             
             # Parse ESTABLISHED connections
             established_ips = set()
+            ntrip_port_str = f":{config.settings.ntrip.port}"
             for line in result.stdout.split('\n'):
-                if ':2101' in line and 'ESTABLISHED' in line:
+                if ntrip_port_str in line and 'ESTABLISHED' in line:
                     # Extract remote IP address
                     match = re.search(r'(\d+\.\d+\.\d+\.\d+):(\d+)\s+ESTABLISHED', line)
                     if match:
@@ -478,13 +479,13 @@ class ConnectionManager:
                         '1005(10)',  # Format details
                         '0',  # Carrier
                         'GPS',  # Nav system
-                        '2RTK',  # Network
-                        'CHN',  # Country
+                        config.settings.app.name,  # Network
+                        config.settings.caster.country,  # Country
                         str(mount_info.lat) if mount_info.lat is not None else '0.0',  # Latitude
                         str(mount_info.lon) if mount_info.lon is not None else '0.0',  # Longitude
                         '0',  # NMEA
                         '0',  # Solution
-                        mount_info.user_agent or 'unknown',  # Generator
+                        f"{config.settings.app.author}_Caster",  # Generator
                         'N',  # Compression
                         'B',  # Authentication
                         'N',  # Fee
@@ -537,7 +538,7 @@ class ConnectionManager:
             }
     
     def start_str_correction(self, mount_name: str):
-        """Start 30-second RTCM parsing to correct STR table"""
+        """Start RTCM parsing to correct STR table"""
         if mount_name not in self.online_mounts:
             log_warning(f"Cannot start STR correction, mount point {mount_name} is not online")
             return
@@ -545,18 +546,18 @@ class ConnectionManager:
         success = rtcm_manager.start_parser(
             mount_name=mount_name,
             mode="str_fix",
-            duration=30
+            duration=config.settings.rtcm.parse_duration
         )
         
         if not success:
             log_error(f"Failed to start STR correction parsing for mount {mount_name}")
             return
             
-        log_info(f"STR correction parsing started for mount {mount_name}, will correct STR table in 30 seconds")
+        log_info(f"STR correction parsing started for mount {mount_name}, will correct STR table in {config.settings.rtcm.parse_duration} seconds")
         
         def wait_and_correct():
             log_debug(f"Waiting for STR correction complete for mount {mount_name}")
-            time.sleep(35)  
+            time.sleep(config.settings.rtcm.parse_duration + 5)
             log_debug(f"Wait complete, getting parsing results for mount {mount_name}")
             
             parse_result = rtcm_manager.get_result(mount_name)
@@ -628,15 +629,13 @@ class ConnectionManager:
     
     def _create_initial_str_parts(self, mount_name: str, parse_result: dict) -> list:
         """Create initial STR field list"""
-        from . import config
-        
         mount_info = self.online_mounts[mount_name]
-        app_author = config.APP_AUTHOR.replace(' ', '') if config.APP_AUTHOR else '2rtk'
+        app_author = config.settings.app.author.replace(' ', '') if config.settings.app.author else '2rtk'
         
         identifier = parse_result.get("city") or mount_info.city or "none"
-        country_code = parse_result.get("country") or mount_info.country or config.CASTER_COUNTRY
-        latitude = parse_result.get("lat") or config.CASTER_LATITUDE
-        longitude = parse_result.get("lon") or config.CASTER_LONGITUDE
+        country_code = parse_result.get("country") or mount_info.country or config.settings.caster.country
+        latitude = parse_result.get("lat") or config.settings.caster.latitude
+        longitude = parse_result.get("lon") or config.settings.caster.longitude
 
         str_parts = [
             "STR",                          # 0: type
@@ -652,7 +651,7 @@ class ConnectionManager:
             f"{longitude:.4f}",            # 10: longitude
             "0",                           # 11: nmea
             "0",                           # 12: solution
-            "2RTK_NtripCaster",           # 13: generator
+            f"{config.settings.app.author}_Caster",           # 13: generator
             "N",                           # 14: compression
             "B",                           # 15: authentication
             "N",                           # 16: fee
@@ -689,7 +688,7 @@ class ConnectionManager:
         if parse_result.get("lon"):
             str_parts[10] = f"{parse_result['lon']:.4f}"
         
-        str_parts[13] = "2RTK_NtripCaster"
+        str_parts[13] = f"{config.settings.app.author}_Caster"
         str_parts[16] = "N"
         
         if parse_result.get("bitrate"):
