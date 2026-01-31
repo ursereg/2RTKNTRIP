@@ -27,5 +27,7 @@ packages = ["ntrip_caster"]
 
 [dependency-groups]
 dev = [
+    "pytest>=9.0.2",
+    "pytest-mock>=3.15.1",
     "requests>=2.32.5",
 ]
