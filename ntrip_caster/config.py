@@ -16,7 +16,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # ==================== Models ====================
 
+# ==================== Basic Configuration ====================
 class AppConfig(BaseModel):
+    """Basic application information"""
     name: str = "2RTK Ntrip Caster"
     version: str = "2.2.0"
     description: str = "Ntrip Caster"
@@ -27,38 +29,46 @@ class AppConfig(BaseModel):
 class DevelopmentConfig(BaseModel):
     debug_mode: bool = False
 
+# ==================== CASTER Configuration ====================
 class CasterConfig(BaseModel):
+    """NTRIP Caster geographic information"""
     country: str = "CHN"
     latitude: float = 25.20341154
     longitude: float = 110.277492
 
+# ==================== Network Configuration ====================
 class NetworkConfig(BaseModel):
+    """Network settings"""
     host: str = "0.0.0.0"
-    max_connections: int = 5000
-    buffer_size: int = 81920
-    max_buffer_size: int = 655360
+    max_connections: int = 5000  # Maximum connections
+    buffer_size: int = 81920     # Buffer size (80KB)
+    max_buffer_size: int = 655360 # Maximum buffer size (640KB)
 
+# ==================== NTRIP Protocol Configuration ====================
 class NtripConfig(BaseModel):
-    port: int = Field(default=2101, ge=1024, le=65535)
+    port: int = Field(default=2101, ge=1024, le=65535) # NTRIP service port
     supported_versions: List[str] = ["1.0", "2.0"]
     default_version: str = "1.0"
     max_user_connections_per_mount: int = 3000
     max_users_per_mount: int = 3000
     max_connections_per_user: int = 3
-    mount_timeout: int = 1800
-    client_timeout: int = 300
-    connection_timeout: int = 1800
+    mount_timeout: int = 1800     # 30 minutes
+    client_timeout: int = 300     # 5 minutes
+    connection_timeout: int = 1800 # Connection timeout (seconds)
 
+# ==================== Web Interface Configuration ====================
 class WebConfig(BaseModel):
-    port: int = Field(default=5757, ge=1024, le=65535)
-    realtime_push_interval: int = 3
+    port: int = Field(default=5757, ge=1024, le=65535) # Web service port
+    realtime_push_interval: int = 3  # Real-time data push interval (seconds)
     page_refresh_interval: int = 30
 
+# ==================== Database Configuration ====================
 class DatabaseConfig(BaseModel):
     path: str = "2rtk.db"
     pool_size: int = 10
     timeout: int = 30
 
+# ==================== Logging Configuration ====================
 class LoggingConfig(BaseModel):
     log_dir: str = "logs"
     main_log_file: str = "main.log"
@@ -66,46 +76,56 @@ class LoggingConfig(BaseModel):
     error_log_file: str = "errors.log"
     log_level: str = "WARNING"
     log_format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    max_log_size: int = 10 * 1024 * 1024
-    backup_count: int = 5
+    max_log_size: int = 10 * 1024 * 1024 # 10MB
+    backup_count: int = 5                # Keep 5 backup files
     log_frequent_status: bool = False
 
 class SecurityConfig(BaseModel):
+    """Password hash configuration and Flask Secret Key"""
     secret_key: str = "8f4a9c2e7d1b6f3a5e8d7c9b2a4f6e3d5c8b7a9f2e4d6c8b3a5f7e9d1c2b4a6"
     password_hash_rounds: int = 3
-    session_timeout: int = 3600
+    session_timeout: int = 3600  # 1 hour
 
 class AdminConfig(BaseModel):
+    """Default administrator account"""
     username: str = "admin"
     password: str = "admin123"
 
+# ==================== TCP Configuration ====================
 class TcpConfig(BaseModel):
+    """TCP Keep-Alive Configuration"""
     keepalive_enabled: bool = True
     keepalive_idle: int = 60
     keepalive_interval: int = 10
     keepalive_count: int = 3
     socket_timeout: int = 120
 
+# ==================== Data Forwarding Configuration ====================
 class DataForwardingConfig(BaseModel):
-    ring_buffer_size: int = 60
+    ring_buffer_size: int = 60  # Ring buffer configuration
     broadcast_interval: float = 0.01
     data_send_timeout: int = 5
     client_health_check_interval: int = 120
 
+# ==================== RTCM Parsing ====================
 class RtcmConfig(BaseModel):
-    parse_interval: int = 5
-    buffer_size: int = 1000
-    parse_duration: int = 30
+    parse_interval: int = 5  # RTCM parsing interval (seconds)
+    buffer_size: int = 1000  # RTCM buffer size
+    parse_duration: int = 30 # RTCM data parsing duration (seconds) - used to correct STR table
 
 class WebsocketConfig(BaseModel):
+    """WebSocket Configuration"""
     enabled: bool = True
     ping_timeout: int = 120
     ping_interval: int = 15
 
+# ==================== Reserved ====================
 class PaymentConfig(BaseModel):
+    """Payment QR Code URLs"""
     alipay_qr_code: str = ""
     wechat_qr_code: str = ""
 
+# ==================== Performance configuration ====================
 class PerformanceConfig(BaseModel):
     thread_pool_size: int = 5000
     max_workers: int = 5000
@@ -137,6 +157,7 @@ class Settings(BaseSettings):
 # ==================== Load Configuration ====================
 
 def load_settings() -> Settings:
+    """Load settings from file or environment variables"""
     config_file = os.environ.get('NTRIP_CONFIG_FILE')
 
     if not config_file:
@@ -185,7 +206,7 @@ def load_settings() -> Settings:
 
 settings = load_settings()
 
-# ==================== RTCM Descriptions ====================
+# ==================== RTCM message type descriptions ====================
 
 RTCM_MESSAGE_DESCRIPTIONS = {
     1001: "L1-Only GPS RTK Observables",
