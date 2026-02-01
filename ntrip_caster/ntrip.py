@@ -22,12 +22,6 @@ from . import logger
 from .logger import log_debug, log_info, log_warning, log_error, log_critical, log_system_event
 from . import connection
 
-DEBUG = config.DEBUG
-VERSION = config.VERSION
-NTRIP_PORT = config.NTRIP_PORT
-WEB_PORT = config.WEB_PORT
-BUFFER_SIZE = config.BUFFER_SIZE
-
 class AntiSpamLogger:
     def __init__(self, time_window=60, max_count=5):
         self.time_window = time_window  
@@ -60,10 +54,6 @@ class AntiSpamLogger:
             return count
 
 anti_spam_logger = AntiSpamLogger(time_window=60, max_count=3)
-MAX_CONNECTIONS = config.MAX_CONNECTIONS
-MAX_CONNECTIONS_PER_USER = config.MAX_CONNECTIONS_PER_USER
-MAX_WORKERS = config.MAX_WORKERS
-CONNECTION_QUEUE_SIZE = config.CONNECTION_QUEUE_SIZE
 
 class NTRIPHandler:
     """NTRIP Request Handler"""
@@ -80,31 +70,31 @@ class NTRIPHandler:
         self.ntrip1_password = ""  
         self.current_method = "GET"  
         
-        self.client_socket.settimeout(config.SOCKET_TIMEOUT)
+        self.client_socket.settimeout(config.settings.tcp.socket_timeout)
         self._configure_keepalive()
     
     def _configure_keepalive(self):
         """Configure TCP Keep-Alive"""
         try:
-            if not config.TCP_KEEPALIVE['enabled']:
+            if not config.settings.tcp.keepalive_enabled:
                 return
             self.client_socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
             
             try:
                 if hasattr(socket, 'TCP_KEEPIDLE'):
-                    self.client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, config.TCP_KEEPALIVE['idle'])
+                    self.client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, config.settings.tcp.keepalive_idle)
                 if hasattr(socket, 'TCP_KEEPINTVL'):
-                    self.client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, config.TCP_KEEPALIVE['interval'])
+                    self.client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, config.settings.tcp.keepalive_interval)
                 if hasattr(socket, 'TCP_KEEPCNT'):
-                    self.client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, config.TCP_KEEPALIVE['count'])
+                    self.client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, config.settings.tcp.keepalive_count)
                 
                 message_key = "tcp_keepalive_configured"
                 if anti_spam_logger.should_log(message_key):
                     suppressed = anti_spam_logger.get_suppressed_count(message_key)
                     if suppressed > 0:
-                        logger.log_debug(f"TCP Keep-Alive configured: idle={config.TCP_KEEPALIVE['idle']}s (Suppressed {suppressed} similar messages)", 'ntrip')
+                        logger.log_debug(f"TCP Keep-Alive configured: idle={config.settings.tcp.keepalive_idle}s (Suppressed {suppressed} similar messages)", 'ntrip')
                     else:
-                        logger.log_debug(f"TCP Keep-Alive configured: idle={config.TCP_KEEPALIVE['idle']}s", 'ntrip')
+                        logger.log_debug(f"TCP Keep-Alive configured: idle={config.settings.tcp.keepalive_idle}s", 'ntrip')
             except OSError:
                 logger.log_debug("TCP Keep-Alive enabled (using system defaults)", 'ntrip')
         except Exception as e:
@@ -114,7 +104,7 @@ class NTRIPHandler:
         """Handle NTRIP request with enhanced validation and error handling"""
         try:
             log_debug(f"=== Starting request handling {self.client_address} ===")
-            request_data = self.client_socket.recv(BUFFER_SIZE).decode('utf-8', errors='ignore')
+            request_data = self.client_socket.recv(config.settings.network.buffer_size).decode('utf-8', errors='ignore')
             if not request_data:
                 log_debug(f"Client {self.client_address} sent empty request")
                 return
@@ -518,8 +508,8 @@ class NTRIPHandler:
                  is_valid, error_msg = self.db_manager.verify_mount_and_user(mount_name, username, password, mount_password=password, protocol_version="1.0")
                  if not is_valid:
                      return False, error_msg
-                 if connection.get_user_connection_count(username) >= MAX_CONNECTIONS_PER_USER:
-                     return False, f"User connection limit exceeded (max: {MAX_CONNECTIONS_PER_USER})"
+                 if connection.get_user_connection_count(username) >= config.settings.ntrip.max_connections_per_user:
+                     return False, f"User connection limit exceeded (max: {config.settings.ntrip.max_connections_per_user})"
                  return True, "Authentication successful"
         except Exception as e:
             logger.log_error(f"User validation exception: {e}", exc_info=True)
@@ -549,8 +539,8 @@ class NTRIPHandler:
             
             if not is_valid:
                 return False, error_msg
-            if connection.get_user_connection_count(username) >= MAX_CONNECTIONS_PER_USER:
-                return False, f"User connection limit exceeded (max: {MAX_CONNECTIONS_PER_USER})"
+            if connection.get_user_connection_count(username) >= config.settings.ntrip.max_connections_per_user:
+                return False, f"User connection limit exceeded (max: {config.settings.ntrip.max_connections_per_user})"
             return True, "Authentication successful"
         except Exception as e:
             logger.log_error(f"Basic auth exception: {e}", exc_info=True)
@@ -579,8 +569,8 @@ class NTRIPHandler:
                 is_valid, error_msg = self.db_manager.verify_mount_and_user(mount_name, username, stored_password, mount_password=stored_password if protocol == "1.0" else None, protocol_version=protocol)
             if not is_valid:
                 return False, error_msg
-            if connection.get_user_connection_count(username) >= MAX_CONNECTIONS_PER_USER:
-                return False, f"User connection limit exceeded (max: {MAX_CONNECTIONS_PER_USER})"
+            if connection.get_user_connection_count(username) >= config.settings.ntrip.max_connections_per_user:
+                return False, f"User connection limit exceeded (max: {config.settings.ntrip.max_connections_per_user})"
             return True, "Authentication successful"
         except Exception as e:
             logger.log_error(f"Digest auth exception: {e}", exc_info=True)
@@ -687,7 +677,7 @@ class NTRIPHandler:
     def _handle_rtsp_play(self, mount, headers):
         """Handle RTSP PLAY command"""
         cseq, session = headers.get('cseq', '1'), headers.get('session', '')
-        rtsp_headers = {'CSeq': cseq, 'Session': session, 'Range': 'npt=0.000-', 'RTP-Info': f'url=rtsp://{config.HOST if config.HOST != "0.0.0.0" else "localhost"}:{config.NTRIP_PORT}/{mount};seq=1;rtptime=0'}
+        rtsp_headers = {'CSeq': cseq, 'Session': session, 'Range': 'npt=0.000-', 'RTP-Info': f'url=rtsp://{config.settings.network.host if config.settings.network.host != "0.0.0.0" else "localhost"}:{config.settings.ntrip.port}/{mount};seq=1;rtptime=0'}
         self._send_response('RTSP/1.0 200 OK', additional_headers=rtsp_headers)
         self.handle_download('/' + mount, headers)
     
@@ -710,7 +700,7 @@ class NTRIPHandler:
     
     def _generate_sdp_description(self, mount):
         """Generate SDP description"""
-        origin_ip = config.HOST if config.HOST != "0.0.0.0" else "127.0.0.1"
+        origin_ip = config.settings.network.host if config.settings.network.host != "0.0.0.0" else "127.0.0.1"
         return f"""v=0\no=- 0 0 IN IP4 {origin_ip}\ns=NTRIP Stream {mount}\nc=IN IP4 0.0.0.0\nt=0 0\nm=application 0 RTP/AVP 96\na=rtpmap:96 rtcm/1000\na=control:*\n"""
     
     def handle_upload(self, path, headers):
@@ -817,7 +807,7 @@ class NTRIPHandler:
         """Handle standard HTTP GET request"""
         try:
             if path == '/' or path == '':
-                content = "<!DOCTYPE html><html><head><title>NTRIP Caster</title></head><body><h1>NTRIP Caster Server</h1><p>This is an NTRIP Caster server.</p></body></html>"
+                content = f"<!DOCTYPE html><html><head><title>{config.settings.app.name}</title></head><body><h1>{config.settings.app.name} Server</h1><p>This is an NTRIP Caster server.</p></body></html>"
                 self._send_response("HTTP/1.1 200 OK", content_type="text/html", content=content)
             else:
                 self.send_error_response(404, "Not Found")
@@ -830,7 +820,7 @@ class NTRIPHandler:
         try:
             while True:
                 try:
-                    data = self.client_socket.recv(BUFFER_SIZE)
+                    data = self.client_socket.recv(config.settings.network.buffer_size)
                     if not data:
                         log_debug(f"Mount point {mount} connection closed", 'ntrip')
                         break
@@ -879,9 +869,9 @@ class NTRIPHandler:
             mount_list = connection.generate_mount_list()
             log_debug(f"Generated mount list: {mount_list}", 'ntrip')
             content_lines = []
-            cas_line = f"CAS;{config.APP_AUTHOR};{config.NTRIP_PORT};{config.APP_NAME};{config.APP_AUTHOR};0;{config.CASTER_COUNTRY};{config.CASTER_LATITUDE};{config.CASTER_LONGITUDE};{config.HOST};0;{config.APP_WEBSITE}"
+            cas_line = f"CAS;{config.settings.app.author};{config.settings.ntrip.port};{config.settings.app.name};{config.settings.app.author};0;{config.settings.caster.country};{config.settings.caster.latitude};{config.settings.caster.longitude};{config.settings.network.host};0;{config.settings.app.website}"
             content_lines.append(cas_line)
-            net_line = f"NET;{config.APP_AUTHOR};{config.APP_AUTHOR};B;{config.CASTER_COUNTRY};{config.APP_WEBSITE};{config.APP_WEBSITE};{config.APP_CONTACT};none"
+            net_line = f"NET;{config.settings.app.author};{config.settings.app.author};B;{config.settings.caster.country};{config.settings.app.website};{config.settings.app.website};{config.settings.app.contact};none"
             content_lines.append(net_line)
             content_lines.extend(mount_list)
             content_str = '\r\n'.join(content_lines) + '\r\n' if content_lines else '\r\n'
@@ -889,14 +879,14 @@ class NTRIPHandler:
             
             current_time = datetime.now(timezone.utc).strftime('%a, %d %b %Y %H:%M:%S GMT')
             if self.ntrip_version == "2.0":
-                response_lines = ["HTTP/1.1 200 OK", f"Server: NTRIP 2RTK caster {config.APP_VERSION}", f"Date: {current_time}", "Ntrip-Version: Ntrip/2.0", f"Content-Length: {len(content_str.encode('utf-8'))}", "Content-Type: text/plain", "Connection: close", "", content_str]
+                response_lines = ["HTTP/1.1 200 OK", f"Server: NTRIP 2RTK caster {config.settings.app.version}", f"Date: {current_time}", "Ntrip-Version: Ntrip/2.0", f"Content-Length: {len(content_str.encode('utf-8'))}", "Content-Type: text/plain", "Connection: close", "", content_str]
                 response = '\r\n'.join(response_lines)
                 try:
                     self.client_socket.send(response.encode('utf-8'))
                     log_debug(f"Sent NTRIP 2.0 mount list to {self.client_address}")
                 except Exception as e: log_error(f"Failed to send NTRIP 2.0 mount list: {e}", exc_info=True)
             else:
-                response_lines = ["SOURCETABLE 200 OK", f"Server: NTRIP 2RTK caster {config.APP_VERSION}", f"Date: {current_time}", "Ntrip-Version: Ntrip/1.0", f"Content-Length: {len(content_str.encode('utf-8'))}", "Content-Type: text/plain", "Connection: close", "", content_str, "ENDSOURCETABLE"]
+                response_lines = ["SOURCETABLE 200 OK", f"Server: NTRIP 2RTK caster {config.settings.app.version}", f"Date: {current_time}", "Ntrip-Version: Ntrip/1.0", f"Content-Length: {len(content_str.encode('utf-8'))}", "Content-Type: text/plain", "Connection: close", "", content_str, "ENDSOURCETABLE"]
                 response = '\r\n'.join(response_lines)
                 try:
                     self.client_socket.send(response.encode('utf-8'))
@@ -958,7 +948,7 @@ class NTRIPHandler:
             headers.extend(["CSeq: 1", f"Session: {id(self)}"])
         elif self.ntrip_version == "2.0":
             headers.append("Ntrip-Version: NTRIP/2.0")
-        headers.extend([f"Date: {current_time}", f"Server: {config.APP_NAME}/{config.VERSION}", "X-Content-Type-Options: nosniff", "X-Frame-Options: DENY"])
+        headers.extend([f"Date: {current_time}", f"Server: {config.settings.app.name}/{config.settings.app.version}", "X-Content-Type-Options: nosniff", "X-Frame-Options: DENY"])
         if additional_headers: headers.extend(additional_headers)
         return "\r\n".join(headers) + "\r\n"
     
@@ -994,7 +984,7 @@ class NTRIPCaster:
         self.running = False
         self.db_manager = db_manager
         self.thread_pool = None
-        self.connection_queue = Queue(maxsize=CONNECTION_QUEUE_SIZE)
+        self.connection_queue = Queue(maxsize=config.settings.performance.connection_queue_size)
         self.active_connections = 0
         self.connection_lock = threading.Lock()
         self.total_connections = 0
@@ -1004,7 +994,7 @@ class NTRIPCaster:
         """Start NTRIP server"""
         try:
             self._start_ntrip_server()
-            log_system_event(f'NTRIP server started, listening on port: {NTRIP_PORT}')
+            log_system_event(f'NTRIP server started, listening on port: {config.settings.ntrip.port}')
             self._main_loop()
         except Exception as e:
             log_error(f"Failed to start NTRIP server: {e}", exc_info=True)
@@ -1014,15 +1004,15 @@ class NTRIPCaster:
         """Initialize NTRIP server socket and thread pool"""
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.server_socket.bind(('0.0.0.0', NTRIP_PORT))
-        self.server_socket.listen(MAX_CONNECTIONS)
+        self.server_socket.bind(('0.0.0.0', config.settings.ntrip.port))
+        self.server_socket.listen(config.settings.network.max_connections)
         self.running = True
-        self.thread_pool = ThreadPoolExecutor(max_workers=MAX_WORKERS, thread_name_prefix="NTRIP-Worker")
+        self.thread_pool = ThreadPoolExecutor(max_workers=config.settings.performance.max_workers, thread_name_prefix="NTRIP-Worker")
         self._start_connection_handler()
-        ntrip_urls = config.get_display_urls(NTRIP_PORT, "NTRIP Server")
+        ntrip_urls = config.get_display_urls(config.settings.ntrip.port, "NTRIP Server")
         log_system_event('NTRIP server started, accessible via the following addresses:')
         for url in ntrip_urls: log_system_event(f'  - {url}')
-        log_system_event(f'Thread pool size: {MAX_WORKERS}, Connection queue size: {CONNECTION_QUEUE_SIZE}')
+        log_system_event(f'Thread pool size: {config.settings.performance.max_workers}, Connection queue size: {config.settings.performance.connection_queue_size}')
     
     def _main_loop(self):
         """Main loop to accept client connections"""
@@ -1030,8 +1020,8 @@ class NTRIPCaster:
             try:
                 client_socket, client_address = self.server_socket.accept()
                 with self.connection_lock:
-                    if self.active_connections >= MAX_CONNECTIONS:
-                        log_warning(f"Connection limit reached ({MAX_CONNECTIONS}), rejecting {client_address}")
+                    if self.active_connections >= config.settings.network.max_connections:
+                        log_warning(f"Connection limit reached ({config.settings.network.max_connections}), rejecting {client_address}")
                         client_socket.close()
                         self.rejected_connections += 1
                         continue
@@ -1082,7 +1072,7 @@ class NTRIPCaster:
     def get_performance_stats(self):
         """Get performance statistics"""
         with self.connection_lock:
-            return {'active_connections': self.active_connections, 'total_connections': self.total_connections, 'rejected_connections': self.rejected_connections, 'queue_size': self.connection_queue.qsize(), 'max_connections': MAX_CONNECTIONS, 'max_workers': MAX_WORKERS, 'connection_queue_size': CONNECTION_QUEUE_SIZE}
+            return {'active_connections': self.active_connections, 'total_connections': self.total_connections, 'rejected_connections': self.rejected_connections, 'queue_size': self.connection_queue.qsize(), 'max_connections': config.settings.network.max_connections, 'max_workers': config.settings.performance.max_workers, 'connection_queue_size': config.settings.performance.connection_queue_size}
     
     def log_performance_stats(self):
         """Log performance statistics"""

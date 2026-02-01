@@ -1,65 +1,245 @@
 #!/usr/bin/env python3
 """
-config.py - Configuration file
-Reads all configuration parameters for NTRIP Caster from config.ini file
+config.py - Configuration module
+Reads configuration parameters from JSON, YAML or INI file using Pydantic
 """
 
 import os
 import socket
 import configparser
+import json
+import yaml
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Dict, Any, Optional
+from pydantic import BaseModel, Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
-CONFIG_FILE = os.environ.get('NTRIP_CONFIG_FILE', 
-                            os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.ini'))
-
-config = configparser.ConfigParser()
-
-if os.path.exists(CONFIG_FILE):
-    print(f"Loading configuration file: {CONFIG_FILE}")
-    config.read(CONFIG_FILE, encoding='utf-8')
-else:
-    raise FileNotFoundError(f"Configuration file {CONFIG_FILE} does not exist")
-
-def get_config_value(section, key, fallback=None, value_type=str):
-    """Get configuration value and convert type"""
-    try:
-        if value_type == bool:
-            return config.getboolean(section, key, fallback=fallback)
-        elif value_type == int:
-            return config.getint(section, key, fallback=fallback)
-        elif value_type == float:
-            return config.getfloat(section, key, fallback=fallback)
-        elif value_type == list:
-            value = config.get(section, key, fallback='')
-            return [item.strip() for item in value.split(',') if item.strip()] if value else fallback or []
-        else:
-            return config.get(section, key, fallback=fallback)
-    except (configparser.NoSectionError, configparser.NoOptionError):
-        return fallback
+# ==================== Models ====================
 
 # ==================== Basic Configuration ====================
+class AppConfig(BaseModel):
+    """Basic application information"""
+    name: str = "2RTK Ntrip Caster"
+    version: str = "2.2.0"
+    description: str = "Ntrip Caster"
+    author: str = "2rtk"
+    contact: str = "i@jia.by"
+    website: str = "https://2rtk.com"
 
-# Basic application information
-APP_NAME = get_config_value('app', 'name', '2RTK Ntrip Caster')
-APP_VERSION = get_config_value('app', 'version', '2.2.0')
-APP_DESCRIPTION = get_config_value('app', 'description', 'Ntrip Caster')
-APP_AUTHOR = get_config_value('app', 'author', '2rtk')
-APP_CONTACT = get_config_value('app', 'contact', 'i@jia.by')
-APP_WEBSITE = get_config_value('app', 'website', 'https://2rtk.com')
-
-VERSION = APP_VERSION
-
-DEBUG = get_config_value('development', 'debug_mode', False, bool)
+class DevelopmentConfig(BaseModel):
+    debug_mode: bool = False
 
 # ==================== CASTER Configuration ====================
-
-# NTRIP Caster geographic information
-CASTER_COUNTRY = get_config_value('caster', 'country', 'CHN')
-CASTER_LATITUDE = get_config_value('caster', 'latitude', 25.20341154, float)
-CASTER_LONGITUDE = get_config_value('caster', 'longitude', 110.277492, float)
+class CasterConfig(BaseModel):
+    """NTRIP Caster geographic information"""
+    country: str = "CHN"
+    latitude: float = 25.20341154
+    longitude: float = 110.277492
 
 # ==================== Network Configuration ====================
+class NetworkConfig(BaseModel):
+    """Network settings"""
+    host: str = "0.0.0.0"
+    max_connections: int = 5000  # Maximum connections
+    buffer_size: int = 81920     # Buffer size (80KB)
+    max_buffer_size: int = 655360 # Maximum buffer size (640KB)
+
+# ==================== NTRIP Protocol Configuration ====================
+class NtripConfig(BaseModel):
+    port: int = Field(default=2101, ge=1024, le=65535) # NTRIP service port
+    supported_versions: List[str] = ["1.0", "2.0"]
+    default_version: str = "1.0"
+    max_user_connections_per_mount: int = 3000
+    max_users_per_mount: int = 3000
+    max_connections_per_user: int = 3
+    mount_timeout: int = 1800     # 30 minutes
+    client_timeout: int = 300     # 5 minutes
+    connection_timeout: int = 1800 # Connection timeout (seconds)
+
+# ==================== Web Interface Configuration ====================
+class WebConfig(BaseModel):
+    port: int = Field(default=5757, ge=1024, le=65535) # Web service port
+    realtime_push_interval: int = 3  # Real-time data push interval (seconds)
+    page_refresh_interval: int = 30
+
+# ==================== Database Configuration ====================
+class DatabaseConfig(BaseModel):
+    path: str = "2rtk.db"
+    pool_size: int = 10
+    timeout: int = 30
+
+# ==================== Logging Configuration ====================
+class LoggingConfig(BaseModel):
+    log_dir: str = "logs"
+    main_log_file: str = "main.log"
+    ntrip_log_file: str = "ntrip.log"
+    error_log_file: str = "errors.log"
+    log_level: str = "WARNING"
+    log_format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    max_log_size: int = 10 * 1024 * 1024 # 10MB
+    backup_count: int = 5                # Keep 5 backup files
+    log_frequent_status: bool = False
+
+class SecurityConfig(BaseModel):
+    """Password hash configuration and Flask Secret Key"""
+    secret_key: str = "8f4a9c2e7d1b6f3a5e8d7c9b2a4f6e3d5c8b7a9f2e4d6c8b3a5f7e9d1c2b4a6"
+    password_hash_rounds: int = 3
+    session_timeout: int = 3600  # 1 hour
+
+class AdminConfig(BaseModel):
+    """Default administrator account"""
+    username: str = "admin"
+    password: str = "admin123"
+
+# ==================== TCP Configuration ====================
+class TcpConfig(BaseModel):
+    """TCP Keep-Alive Configuration"""
+    keepalive_enabled: bool = True
+    keepalive_idle: int = 60
+    keepalive_interval: int = 10
+    keepalive_count: int = 3
+    socket_timeout: int = 120
+
+# ==================== Data Forwarding Configuration ====================
+class DataForwardingConfig(BaseModel):
+    ring_buffer_size: int = 60  # Ring buffer configuration
+    broadcast_interval: float = 0.01
+    data_send_timeout: int = 5
+    client_health_check_interval: int = 120
+
+# ==================== RTCM Parsing ====================
+class RtcmConfig(BaseModel):
+    parse_interval: int = 5  # RTCM parsing interval (seconds)
+    buffer_size: int = 1000  # RTCM buffer size
+    parse_duration: int = 30 # RTCM data parsing duration (seconds) - used to correct STR table
+
+class WebsocketConfig(BaseModel):
+    """WebSocket Configuration"""
+    enabled: bool = True
+    ping_timeout: int = 120
+    ping_interval: int = 15
+
+# ==================== Reserved ====================
+class PaymentConfig(BaseModel):
+    """Payment QR Code URLs"""
+    alipay_qr_code: str = ""
+    wechat_qr_code: str = ""
+
+# ==================== Performance configuration ====================
+class PerformanceConfig(BaseModel):
+    thread_pool_size: int = 5000
+    max_workers: int = 5000
+    connection_queue_size: int = 5000
+    max_memory_usage: int = 2048
+    cpu_warning_threshold: int = 80
+    memory_warning_threshold: int = 80
+
+class Settings(BaseSettings):
+    app: AppConfig = AppConfig()
+    development: DevelopmentConfig = DevelopmentConfig()
+    caster: CasterConfig = CasterConfig()
+    network: NetworkConfig = NetworkConfig()
+    ntrip: NtripConfig = NtripConfig()
+    web: WebConfig = WebConfig()
+    database: DatabaseConfig = DatabaseConfig()
+    logging: LoggingConfig = LoggingConfig()
+    security: SecurityConfig = SecurityConfig()
+    admin: AdminConfig = AdminConfig()
+    tcp: TcpConfig = TcpConfig()
+    data_forwarding: DataForwardingConfig = DataForwardingConfig()
+    rtcm: RtcmConfig = RtcmConfig()
+    websocket: WebsocketConfig = WebsocketConfig()
+    payment: PaymentConfig = PaymentConfig()
+    performance: PerformanceConfig = PerformanceConfig()
+
+    model_config = SettingsConfigDict(env_nested_delimiter='__', env_prefix='NTRIP_CASTER_')
+
+# ==================== Load Configuration ====================
+
+def load_settings() -> Settings:
+    """Load settings from file or environment variables"""
+    config_file = os.environ.get('NTRIP_CONFIG_FILE')
+
+    if not config_file:
+        defaults = ['config.yaml', 'config.yml', 'config.json', 'config.ini']
+        root_dir = Path(__file__).parent.parent
+        for d in defaults:
+            p = root_dir / d
+            if p.exists():
+                config_file = str(p)
+                break
+
+    if not config_file or not os.path.exists(config_file):
+        # Even if file doesn't exist, pydantic-settings will still load from env vars
+        return Settings()
+
+    ext = os.path.splitext(config_file)[1].lower()
+
+    try:
+        if ext in ('.yaml', '.yml'):
+            with open(config_file, 'r', encoding='utf-8') as f:
+                data = yaml.safe_load(f)
+                return Settings.model_validate(data)
+        elif ext == '.json':
+            with open(config_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                return Settings.model_validate(data)
+        elif ext == '.ini':
+            cp = configparser.ConfigParser()
+            cp.read(config_file, encoding='utf-8')
+            data = {}
+            for section in cp.sections():
+                section_data = {}
+                for key, value in cp.items(section):
+                    # INI values are always strings, Pydantic will try to convert them
+                    # But for lists, we need to handle it
+                    if section == 'ntrip' and key == 'supported_versions':
+                        section_data[key] = [item.strip() for item in value.split(',') if item.strip()]
+                    else:
+                        section_data[key] = value
+                data[section] = section_data
+            return Settings.model_validate(data)
+    except Exception as e:
+        print(f"Error loading config file {config_file}: {e}")
+
+    return Settings()
+
+settings = load_settings()
+
+# ==================== RTCM message type descriptions ====================
+
+RTCM_MESSAGE_DESCRIPTIONS = {
+    1001: "L1-Only GPS RTK Observables",
+    1002: "Extended L1-Only GPS RTK Observables",
+    1003: "L1&L2 GPS RTK Observables",
+    1004: "Extended L1&L2 GPS RTK Observables",
+    1005: "Stationary RTK Reference Station ARP",
+    1006: "Stationary RTK Reference Station ARP with Antenna Height",
+    1007: "Antenna Descriptor",
+    1008: "Antenna Descriptor & Serial Number",
+    1009: "L1-Only GLONASS RTK Observables",
+    1010: "Extended L1-Only GLONASS RTK Observables",
+    1011: "L1&L2 GLONASS RTK Observables",
+    1012: "Extended L1&L2 GLONASS RTK Observables",
+    1013: "System Parameters",
+    1019: "GPS Ephemerides",
+    1020: "GLONASS Ephemerides",
+    1033: "Receiver and Antenna Descriptors",
+    1074: "GPS MSM4",
+    1075: "GPS MSM5",
+    1077: "GPS MSM7",
+    1084: "GLONASS MSM4",
+    1085: "GLONASS MSM5",
+    1087: "GLONASS MSM7",
+    1094: "Galileo MSM4",
+    1095: "Galileo MSM5",
+    1097: "Galileo MSM7",
+    1124: "BeiDou MSM4",
+    1125: "BeiDou MSM5",
+    1127: "BeiDou MSM7"
+}
+
+# ==================== Utility Functions ====================
 
 def get_all_network_interfaces() -> List[Tuple[str, str]]:
     """Get IP addresses of all network interfaces"""
@@ -119,7 +299,7 @@ def get_display_urls(port: int, service_name: str = "Service") -> List[str]:
     """Get all accessible URLs for display"""
     urls = []
     
-    listen_host = get_config_value('network', 'host', '0.0.0.0')
+    listen_host = settings.network.host
     
     if listen_host == '0.0.0.0':
         for interface_name, ip in get_private_ips():
@@ -129,219 +309,58 @@ def get_display_urls(port: int, service_name: str = "Service") -> List[str]:
     
     return urls
 
-# Network settings
-HOST = get_config_value('network', 'host', '0.0.0.0') 
-
-NTRIP_HOST = HOST  
-NTRIP_PORT = get_config_value('ntrip', 'port', 2101, int)  # NTRIP service port
-
-WEB_HOST = HOST  # Web service listen address
-WEB_PORT = get_config_value('web', 'port', 5757, int)      # Web service port
-
-# Maximum connections
-MAX_CONNECTIONS = get_config_value('network', 'max_connections', 5000, int)
-
-# Buffer size
-BUFFER_SIZE = get_config_value('network', 'buffer_size', 81920, int)      # 80KB
-MAX_BUFFER_SIZE = get_config_value('network', 'max_buffer_size', 655360, int) # 640KB
-
-# ==================== Database Configuration ====================
-
-DATABASE_PATH = get_config_value('database', 'path', '2rtk.db')
-DB_POOL_SIZE = get_config_value('database', 'pool_size', 10, int)
-DB_TIMEOUT = get_config_value('database', 'timeout', 30, int)
-
-# ==================== Logging Configuration ====================
-
-LOG_DIR = get_config_value('logging', 'log_dir', 'logs')
-LOG_FILES = {
-    'main': get_config_value('logging', 'main_log_file', 'main.log'),
-    'ntrip': get_config_value('logging', 'ntrip_log_file', 'ntrip.log'), 
-    'errors': get_config_value('logging', 'error_log_file', 'errors.log')
-}
-
-LOG_LEVEL = get_config_value('logging', 'log_level', "WARNING")
-
-LOG_FORMAT = get_config_value('logging', 'log_format', '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-
-LOG_MAX_SIZE = get_config_value('logging', 'max_log_size', 10 * 1024 * 1024, int)  # 10MB
-
-LOG_BACKUP_COUNT = get_config_value('logging', 'backup_count', 5, int)  # Keep 5 backup files
-
-LOG_FREQUENT_STATUS = get_config_value('logging', 'log_frequent_status', False, bool)
-
-# Flask Secret Key
-SECRET_KEY = get_config_value('security', 'secret_key', '8f4a9c2e7d1b6f3a5e8d7c9b2a4f6e3d5c8b7a9f2e4d6c8b3a5f7e9d1c2b4a6')
-FLASK_SECRET_KEY = SECRET_KEY
-
-# Password hash configuration
-PASSWORD_HASH_ROUNDS = get_config_value('security', 'password_hash_rounds', 3, int)
-SESSION_TIMEOUT = get_config_value('security', 'session_timeout', 3600, int)  # 1 hour
-
-# Default administrator account
-DEFAULT_ADMIN = {
-    'username': get_config_value('admin', 'username', 'admin'),
-    'password': get_config_value('admin', 'password', 'admin123')
-}
-
-# ==================== NTRIP Protocol Configuration ====================
-
-SUPPORTED_NTRIP_VERSIONS = get_config_value('ntrip', 'supported_versions', ['1.0', '2.0'], list)
-
-DEFAULT_NTRIP_VERSION = get_config_value('ntrip', 'default_version', '1.0')
-MAX_USER_CONNECTIONS_PER_MOUNT = get_config_value('ntrip', 'max_user_connections_per_mount', 3000, int)
-MAX_USERS_PER_MOUNT = get_config_value('ntrip', 'max_users_per_mount', 3000, int)
-MAX_CONNECTIONS_PER_USER = get_config_value('ntrip', 'max_connections_per_user', 3, int)
-MOUNT_TIMEOUT = get_config_value('ntrip', 'mount_timeout', 1800, int)  # 30 minutes
-CLIENT_TIMEOUT = get_config_value('ntrip', 'client_timeout', 300, int)  # 5 minutes
-CONNECTION_TIMEOUT = get_config_value('ntrip', 'connection_timeout', 1800, int)  # Connection timeout (seconds)
-
-# ==================== TCP Configuration ====================
-
-# TCP Keep-Alive Configuration
-TCP_KEEPALIVE = {
-    'enabled': get_config_value('tcp', 'keepalive_enabled', True, bool),
-    'idle': get_config_value('tcp', 'keepalive_idle', 60, int),
-    'interval': get_config_value('tcp', 'keepalive_interval', 10, int),
-    'count': get_config_value('tcp', 'keepalive_count', 3, int)
-}
-SOCKET_TIMEOUT = get_config_value('tcp', 'socket_timeout', 120, int)
-
-# ==================== Data Forwarding Configuration ====================
-
-# Ring buffer configuration
-RING_BUFFER_SIZE = get_config_value('data_forwarding', 'ring_buffer_size', 60, int)
-
-BROADCAST_INTERVAL = get_config_value('data_forwarding', 'broadcast_interval', 0.01, float)
-
-DATA_SEND_TIMEOUT = get_config_value('data_forwarding', 'data_send_timeout', 5, int)
-
-CLIENT_HEALTH_CHECK_INTERVAL = get_config_value('data_forwarding', 'client_health_check_interval', 120, int)
-
-# ==================== RTCM Parsing ====================
-
-# RTCM parsing interval (seconds)
-RTCM_PARSE_INTERVAL = get_config_value('rtcm', 'parse_interval', 5, int)
-
-# RTCM buffer size
-RTCM_BUFFER_SIZE = get_config_value('rtcm', 'buffer_size', 1000, int)
-
-# RTCM data parsing duration (seconds) - used to correct STR table
-RTCM_PARSE_DURATION = get_config_value('rtcm', 'parse_duration', 30, int)
-
-# RTCM message type descriptions
-RTCM_MESSAGE_DESCRIPTIONS = {
-    1001: "L1-Only GPS RTK Observables",
-    1002: "Extended L1-Only GPS RTK Observables", 
-    1003: "L1&L2 GPS RTK Observables",
-    1004: "Extended L1&L2 GPS RTK Observables",
-    1005: "Stationary RTK Reference Station ARP",
-    1006: "Stationary RTK Reference Station ARP with Antenna Height",
-    1007: "Antenna Descriptor",
-    1008: "Antenna Descriptor & Serial Number",
-    1009: "L1-Only GLONASS RTK Observables",
-    1010: "Extended L1-Only GLONASS RTK Observables",
-    1011: "L1&L2 GLONASS RTK Observables",
-    1012: "Extended L1&L2 GLONASS RTK Observables",
-    1013: "System Parameters",
-    1019: "GPS Ephemerides",
-    1020: "GLONASS Ephemerides",
-    1033: "Receiver and Antenna Descriptors",
-    1074: "GPS MSM4",
-    1075: "GPS MSM5",
-    1077: "GPS MSM7",
-    1084: "GLONASS MSM4",
-    1085: "GLONASS MSM5",
-    1087: "GLONASS MSM7",
-    1094: "Galileo MSM4",
-    1095: "Galileo MSM5",
-    1097: "Galileo MSM7",
-    1124: "BeiDou MSM4",
-    1125: "BeiDou MSM5",
-    1127: "BeiDou MSM7"
-}
-
-# ==================== Web Interface Configuration ====================
-
-# WebSocket Configuration
-WEBSOCKET_CONFIG = {
-    'ping_timeout': get_config_value('websocket', 'ping_timeout', 120, int),
-    'ping_interval': get_config_value('websocket', 'ping_interval', 15, int)
-}
-WEBSOCKET_ENABLED = get_config_value('websocket', 'enabled', True, bool)
-
-# Real-time data push interval (seconds)
-REALTIME_PUSH_INTERVAL = get_config_value('web', 'realtime_push_interval', 3, int)
-
-PAGE_REFRESH_INTERVAL = get_config_value('web', 'page_refresh_interval', 30, int)
-
-# ==================== Reserved ====================
-# Payment QR Code URLs
-PAYMENT_QR_CODES = {
-    'alipay': get_config_value('payment', 'alipay_qr_code', ''),
-    'wechat': get_config_value('payment', 'wechat_qr_code', '')
-}
-
-ALIPAY_QR_URL = PAYMENT_QR_CODES['alipay']
-WECHAT_QR_URL = PAYMENT_QR_CODES['wechat']
-
-# Performance configuration
-THREAD_POOL_SIZE = get_config_value('performance', 'thread_pool_size', 5000, int)
-MAX_WORKERS = get_config_value('performance', 'max_workers', 5000, int)
-CONNECTION_QUEUE_SIZE = get_config_value('performance', 'connection_queue_size', 5000, int)
-
-MAX_MEMORY_USAGE = get_config_value('performance', 'max_memory_usage', 2048, int)
-
-CPU_WARNING_THRESHOLD = get_config_value('performance', 'cpu_warning_threshold', 80, int)
-
-MEMORY_WARNING_THRESHOLD = get_config_value('performance', 'memory_warning_threshold', 80, int)
-
 def load_from_env():
-    """Load configuration from environment variables"""
-    global NTRIP_PORT, WEB_PORT, DEBUG, DATABASE_PATH
+    """
+    Load configuration from environment variables.
+    Note: Pydantic Settings already handles environment variables.
+    This function refreshes the settings.
+    """
+    global settings
     
+    # Check for legacy env vars
+    new_data = {}
     if 'NTRIP_PORT' in os.environ:
         try:
-            NTRIP_PORT = int(os.environ['NTRIP_PORT'])
+            new_data.setdefault('ntrip', {})['port'] = int(os.environ['NTRIP_PORT'])
         except ValueError:
             pass
-    
     if 'WEB_PORT' in os.environ:
         try:
-            WEB_PORT = int(os.environ['WEB_PORT'])
+            new_data.setdefault('web', {})['port'] = int(os.environ['WEB_PORT'])
         except ValueError:
             pass
-    
     if 'DEBUG' in os.environ:
-        DEBUG = os.environ['DEBUG'].lower() in ('true', '1', 'yes', 'on')
-    
+        new_data.setdefault('development', {})['debug_mode'] = os.environ['DEBUG'].lower() in ('true', '1', 'yes', 'on')
     if 'DATABASE_PATH' in os.environ:
-        DATABASE_PATH = os.environ['DATABASE_PATH']
-    
+        new_data.setdefault('database', {})['path'] = os.environ['DATABASE_PATH']
     if 'SECRET_KEY' in os.environ:
-        global SECRET_KEY
-        SECRET_KEY = os.environ['SECRET_KEY']
+        new_data.setdefault('security', {})['secret_key'] = os.environ['SECRET_KEY']
 
-# ==================== Configuration Validation ====================
+    if new_data:
+        # Update existing settings with new env data
+        for section, values in new_data.items():
+            section_model = getattr(settings, section)
+            for k, v in values.items():
+                setattr(section_model, k, v)
 
 def validate_config():
     """Validate configuration parameters"""
     errors = []
     
-    if not (1024 <= NTRIP_PORT <= 65535):
-        errors.append(f"NTRIP port {NTRIP_PORT} is out of valid range (1024-65535)")
+    if not (1024 <= settings.ntrip.port <= 65535):
+        errors.append(f"NTRIP port {settings.ntrip.port} is out of valid range (1024-65535)")
     
-    if not (1024 <= WEB_PORT <= 65535):
-        errors.append(f"Web port {WEB_PORT} is out of valid range (1024-65535)")
+    if not (1024 <= settings.web.port <= 65535):
+        errors.append(f"Web port {settings.web.port} is out of valid range (1024-65535)")
     
-    if BUFFER_SIZE <= 0 or BUFFER_SIZE > MAX_BUFFER_SIZE:
-        errors.append(f"Buffer size {BUFFER_SIZE} is invalid")
+    if settings.network.buffer_size <= 0 or settings.network.buffer_size > settings.network.max_buffer_size:
+        errors.append(f"Buffer size {settings.network.buffer_size} is invalid")
     
-    if not os.path.exists(LOG_DIR):
+    if not os.path.exists(settings.logging.log_dir):
         try:
-            os.makedirs(LOG_DIR)
+            os.makedirs(settings.logging.log_dir)
         except Exception as e:
-            errors.append(f"Cannot create log directory {LOG_DIR}: {e}")
+            errors.append(f"Cannot create log directory {settings.logging.log_dir}: {e}")
     
     return errors
 
@@ -356,18 +375,23 @@ def init_config():
 def get_config_dict():
     """Get configuration dictionary for debugging"""
     return {
-        'version': VERSION,
-        'app_name': APP_NAME,
-        'debug': DEBUG,
-        'ntrip_host': NTRIP_HOST,
-        'ntrip_port': NTRIP_PORT,
-        'web_host': WEB_HOST,
-        'web_port': WEB_PORT,
-        'max_connections': MAX_CONNECTIONS,
-        'buffer_size': BUFFER_SIZE,
-        'database_path': DATABASE_PATH,
-        'log_level': LOG_LEVEL,
-        'tcp_keepalive': TCP_KEEPALIVE,
-        'ring_buffer_size': RING_BUFFER_SIZE,
-        'rtcm_parse_interval': RTCM_PARSE_INTERVAL
+        'version': settings.app.version,
+        'app_name': settings.app.name,
+        'debug': settings.development.debug_mode,
+        'ntrip_host': settings.network.host,
+        'ntrip_port': settings.ntrip.port,
+        'web_host': settings.network.host,
+        'web_port': settings.web.port,
+        'max_connections': settings.network.max_connections,
+        'buffer_size': settings.network.buffer_size,
+        'database_path': settings.database.path,
+        'log_level': settings.logging.log_level,
+        'tcp_keepalive': {
+            'enabled': settings.tcp.keepalive_enabled,
+            'idle': settings.tcp.keepalive_idle,
+            'interval': settings.tcp.keepalive_interval,
+            'count': settings.tcp.keepalive_count
+        },
+        'ring_buffer_size': settings.data_forwarding.ring_buffer_size,
+        'rtcm_parse_interval': settings.rtcm.parse_interval
     }

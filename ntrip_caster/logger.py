@@ -10,22 +10,7 @@ from pathlib import Path
 import threading
 
 # Import configuration
-try:
-    from . import config
-except ImportError:
-    class DefaultConfig:
-        LOG_LEVEL = 'INFO'
-        LOG_DIR = 'logs'
-        LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        LOG_FILES = {
-            'main': 'main.log',
-            'ntrip': 'ntrip.log',
-            'errors': 'errors.log'
-        }
-        LOG_MAX_SIZE = 10 * 1024 * 1024  # 10MB
-        LOG_BACKUP_COUNT = 5
-        DEBUG = False
-    config = DefaultConfig()
+from . import config
 
 class NTRIPLogger:
     """
@@ -60,18 +45,18 @@ class NTRIPLogger:
         
     def _setup_logging(self):
         """Setup logging system"""
-        log_dir = Path(config.LOG_DIR)
+        log_dir = Path(config.settings.logging.log_dir)
         log_dir.mkdir(exist_ok=True)
         
         formatter = logging.Formatter(
-            config.LOG_FORMAT,
+            config.settings.logging.log_format,
             datefmt='%Y-%m-%d %H:%M:%S'
         )
         
         # Create different types of loggers
-        self._create_logger('main', config.LOG_FILES['main'], logging.INFO, formatter)
-        self._create_logger('ntrip', config.LOG_FILES['ntrip'], logging.DEBUG, formatter)
-        self._create_logger('error', config.LOG_FILES['errors'], logging.ERROR, formatter)
+        self._create_logger('main', config.settings.logging.main_log_file, logging.INFO, formatter)
+        self._create_logger('ntrip', config.settings.logging.ntrip_log_file, logging.DEBUG, formatter)
+        self._create_logger('error', config.settings.logging.error_log_file, logging.ERROR, formatter)
         
         self._create_root_logger(formatter)
     
@@ -82,18 +67,18 @@ class NTRIPLogger:
         
         logger.handlers.clear()
         
-        file_path = os.path.join(config.LOG_DIR, filename)
+        file_path = os.path.join(config.settings.logging.log_dir, filename)
         file_handler = RotatingFileHandler(
             file_path,
-            maxBytes=config.LOG_MAX_SIZE,
-            backupCount=config.LOG_BACKUP_COUNT,
+            maxBytes=config.settings.logging.max_log_size,
+            backupCount=config.settings.logging.backup_count,
             encoding='utf-8'
         )
         file_handler.setLevel(level)
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
         
-        if config.DEBUG or level >= logging.ERROR:
+        if config.settings.development.debug_mode or level >= logging.ERROR:
             console_handler = logging.StreamHandler(sys.stdout)
             console_handler.setLevel(level)
             console_handler.setFormatter(formatter)
@@ -105,7 +90,7 @@ class NTRIPLogger:
     def _create_root_logger(self, formatter):
         """Create root logger"""
         root_logger = logging.getLogger()
-        root_level = getattr(logging, config.LOG_LEVEL, logging.INFO)
+        root_level = getattr(logging, config.settings.logging.log_level, logging.INFO)
         root_logger.setLevel(root_level)
         
         if not root_logger.handlers:

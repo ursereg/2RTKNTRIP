@@ -16,8 +16,8 @@ def test_batch_add_users(client):
     """Refactored batch user addition test"""
     # Admin login
     login_response = client.post('/api/login', json={
-        "username": config.DEFAULT_ADMIN['username'],
-        "password": config.DEFAULT_ADMIN['password']
+        "username": config.settings.admin.username,
+        "password": config.settings.admin.password
     })
     assert login_response.status_code == 200
     

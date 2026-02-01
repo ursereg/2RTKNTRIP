@@ -15,7 +15,7 @@ from threading import Thread
 # Parse command line arguments
 parser = argparse.ArgumentParser(description='2RTK NTRIP Caster')
 parser.add_argument('--config', type=str, help='Path to configuration file')
-args = parser.parse_args()
+args, unknown = parser.parse_known_args()
 
 # Add project root to Python path
 project_root = Path(__file__).parent.parent
@@ -57,10 +57,10 @@ def print_banner():
     ██╔═══╝ ██╔══██╗   ██║   ██║  ██╗
     ███████╗██║  ██║   ██║   ██║  ██╗
     ╚══════╝╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝
-    2RTK Ntrip Caster {config.VERSION}
+    2RTK Ntrip Caster {config.settings.app.version}
 
-NTRIP Port: {config.NTRIP_PORT:<8} Web Management Port: {config.WEB_PORT:<8} 
-Debug Mode: {str(config.DEBUG):<9} Max Connections: {config.MAX_CONNECTIONS:<8} 
+NTRIP Port: {config.settings.ntrip.port:<8} Web Management Port: {config.settings.web.port:<8}
+Debug Mode: {str(config.settings.development.debug_mode):<9} Max Connections: {config.settings.network.max_connections:<8}
 
     """
     print(banner)
@@ -76,8 +76,8 @@ def check_environment():
     
     # Check necessary directories
     required_dirs = [
-        Path(config.DATABASE_PATH).parent,
-        Path(config.LOG_DIR)
+        Path(config.settings.database.path).parent,
+        Path(config.settings.logging.log_dir)
     ]
     
     for dir_path in required_dirs:
@@ -98,8 +98,8 @@ def check_environment():
             return False
     
     ports_ok = True
-    ports_ok &= check_port(config.NTRIP_PORT, "NTRIP")
-    ports_ok &= check_port(config.WEB_PORT, "Web")
+    ports_ok &= check_port(config.settings.ntrip.port, "NTRIP")
+    ports_ok &= check_port(config.settings.web.port, "Web")
     
     if not ports_ok:
         env_logger.error("Port check failed, please check port usage")
@@ -128,7 +128,7 @@ class ServiceManager:
         """Start all services"""
         try:
             self.start_time = time.time()
-            logger.log_system_event(f'Starting 2RTK NTRIP Caster v{config.VERSION}')
+            logger.log_system_event(f'Starting 2RTK NTRIP Caster v{config.settings.app.version}')
             
             # 1. Initialize database
             self.db_manager = DatabaseManager()
@@ -157,7 +157,7 @@ class ServiceManager:
             signal.signal(signal.SIGTERM, self._signal_handler)
             
             self.running = True
-            logger.log_system_event(f'All services started - NTRIP port: {config.NTRIP_PORT}, Web port: {config.WEB_PORT}')
+            logger.log_system_event(f'All services started - NTRIP port: {config.settings.ntrip.port}, Web port: {config.settings.web.port}')
             
             # Start stats monitor thread
             self._start_stats_monitor()
@@ -183,13 +183,13 @@ class ServiceManager:
         self.web_manager.start_rtcm_parsing()
         
         def run_web():
-            self.web_manager.run(host=config.HOST, port=config.WEB_PORT, debug=False)
+            self.web_manager.run(host=config.settings.network.host, port=config.settings.web.port, debug=False)
         
         self.web_thread = Thread(target=run_web, daemon=True)
         self.web_thread.start()
         
         # Display all accessible Web management interface addresses
-        web_urls = config.get_display_urls(config.WEB_PORT, "Web Management Interface")
+        web_urls = config.get_display_urls(config.settings.web.port, "Web Management Interface")
         if len(web_urls) == 1:
             logger.log_info(f'Web management interface started, management address: {web_urls[0]}')
         else:
@@ -427,6 +427,9 @@ def main():
     """Main function"""
     global server
     try:
+        # Initialize configuration first to use its values
+        config.init_config()
+
         # Setup logging
         setup_logging()
         
@@ -436,8 +439,6 @@ def main():
         # Check environment
         check_environment()
         
-        # Initialize configuration
-        config.init_config()
         logger.log_system_event('Configuration initialization complete')
         
         # Create server instance and start all services

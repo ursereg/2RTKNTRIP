@@ -1,5 +1,6 @@
 import pytest
 from ntrip_caster import database
+from ntrip_caster import config
 
 def test_hash_and_verify_password():
     password = "test_password"
@@ -129,11 +130,10 @@ def test_authentication_verification(temp_db):
 
 def test_admin_verification(temp_db):
     # Default admin from config
-    from ntrip_caster import config
-    assert database.verify_admin(config.DEFAULT_ADMIN['username'], config.DEFAULT_ADMIN['password'])
+    assert database.verify_admin(config.settings.admin.username, config.settings.admin.password)
 
     # Update admin password
     new_admin_pass = "newadmin123"
-    assert database.update_admin_password(config.DEFAULT_ADMIN['username'], new_admin_pass)
-    assert database.verify_admin(config.DEFAULT_ADMIN['username'], new_admin_pass)
-    assert not database.verify_admin(config.DEFAULT_ADMIN['username'], config.DEFAULT_ADMIN['password'])
+    assert database.update_admin_password(config.settings.admin.username, new_admin_pass)
+    assert database.verify_admin(config.settings.admin.username, new_admin_pass)
+    assert not database.verify_admin(config.settings.admin.username, config.settings.admin.password)

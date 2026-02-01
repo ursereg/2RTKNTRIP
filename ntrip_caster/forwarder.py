@@ -13,7 +13,7 @@ from . import connection
 class RingBuffer:
     """Ring Buffer"""
     def __init__(self, maxlen=None):
-        self.maxlen = maxlen or config.RING_BUFFER_SIZE
+        self.maxlen = maxlen or config.settings.data_forwarding.ring_buffer_size
         self.buffer = deque(maxlen=self.maxlen)
         self.lock = Lock()
         self.total_bytes = 0
@@ -116,8 +116,8 @@ class SimpleDataForwarder:
     """Simplified data broadcaster"""
     
     def __init__(self, buffer_maxlen=None, broadcast_interval=None):
-        self.buffer_maxlen = buffer_maxlen or config.RING_BUFFER_SIZE
-        self.broadcast_interval = broadcast_interval or config.BROADCAST_INTERVAL
+        self.buffer_maxlen = buffer_maxlen or config.settings.data_forwarding.ring_buffer_size
+        self.broadcast_interval = broadcast_interval or config.settings.data_forwarding.broadcast_interval
         
         self.mount_buffers = {}  # {mount_name: RingBuffer}
         self.buffer_lock = RLock()
@@ -196,7 +196,7 @@ class SimpleDataForwarder:
                     self.clients[mount] = []
                 
                 user_connections = [c for c in self.clients[mount] if c['user'] == user]
-                if len(user_connections) >= config.MAX_USERS_PER_MOUNT:
+                if len(user_connections) >= config.settings.ntrip.max_users_per_mount:
                     oldest = min(user_connections, key=lambda x: x['connected_at'])
                     self.remove_client(oldest)
                 
@@ -219,23 +219,23 @@ class SimpleDataForwarder:
     def _enable_keepalive(self, client_socket):
         """TCP Keep-Alive settings"""
         try:
-            if not config.TCP_KEEPALIVE['enabled']:
+            if not config.settings.tcp.keepalive_enabled:
                 return
                 
             client_socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
             
             try:
                 if hasattr(socket, 'TCP_KEEPIDLE'):
-                    client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, config.TCP_KEEPALIVE['idle'])
+                    client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, config.settings.tcp.keepalive_idle)
                 if hasattr(socket, 'TCP_KEEPINTVL'):
-                    client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, config.TCP_KEEPALIVE['interval'])
+                    client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, config.settings.tcp.keepalive_interval)
                 if hasattr(socket, 'TCP_KEEPCNT'):
-                    client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, config.TCP_KEEPALIVE['count'])
+                    client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, config.settings.tcp.keepalive_count)
             except OSError:
                 pass
             
-            client_socket.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, config.BUFFER_SIZE)
-            client_socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, config.BUFFER_SIZE)
+            client_socket.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, config.settings.network.buffer_size)
+            client_socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, config.settings.network.buffer_size)
             
         except Exception as e:
             logger.log_warning(f"Failed to set TCP Keep-Alive: {e}", 'ntrip')
