@@ -62,7 +62,34 @@ The project is structured as a proper Python package. The source code is located
 ### Running tests
 
 ```bash
-uv run python tests/test_add_users.py
+uv run pytest
+```
+
+### Development Tools
+
+We use `ruff` for linting and formatting, and `mypy` for type checking.
+
+To check the code:
+```bash
+uv run ruff check .
+uv run mypy .
+```
+
+To format the code:
+```bash
+uv run ruff format .
+```
+
+### Pre-commit Hooks
+
+We use `pre-commit` to ensure code quality. To install the hooks:
+```bash
+uv run pre-commit install
+```
+
+The hooks will run automatically on every commit. You can also run them manually:
+```bash
+uv run pre-commit run --all-files
 ```
 
 ## Acknowledgments
