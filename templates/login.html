@@ -117,6 +117,15 @@
             </div>
             <button type="submit" class="btn" id="loginBtn">Login</button>
         </form>
+
+        {% if oidc_enabled %}
+            <div style="margin-top: 20px; text-align: center; border-top: 1px solid #ddd; padding-top: 20px;">
+                <p style="color: #666; margin-bottom: 15px; font-size: 14px;">Or use Enterprise Identity Provider</p>
+                <a href="{{ url_for('oidc_login') }}" class="btn" style="text-decoration: none; display: block; background: #2d3748;">
+                    Login with OIDC
+                </a>
+            </div>
+        {% endif %}
     </div>
     
     <script>

@@ -17,7 +17,7 @@ from queue import Empty, Full, Queue
 from threading import Thread
 from typing import Any
 
-from . import config, connection, forwarder, logger
+from . import config, connection, forwarder, logger, metrics
 from .database import DatabaseManager
 from .logger import log_debug, log_error, log_info, log_system_event, log_warning
 
@@ -156,6 +156,7 @@ class NTRIPHandler:
             is_valid, error_msg = self._is_valid_request(method, path, headers)
             if not is_valid:
                 log_info(f"Request validation failed for {self.client_address}: {error_msg}")
+                metrics.AUTH_ATTEMPTS.labels(status="failed", type="user").inc()
                 self.send_error_response(400, f"Bad Request: {error_msg}")
                 return
 
@@ -459,104 +460,49 @@ class NTRIPHandler:
             mount_name = mount.lstrip("/")
             self.mount = mount_name
 
-            if self.protocol_type == "ntrip1_0":
-                if auth_header.startswith("Basic "):
-                    return self._verify_basic_auth(mount, auth_header, request_type)
-                elif auth_header.startswith("Digest "):
-                    return self._verify_digest_auth(mount, auth_header, request_type)
-                elif hasattr(self, "ntrip1_password") and self.ntrip1_password:
-                    is_valid, error_msg = self.db_manager.verify_mount_and_user(
-                        mount_name, mount_password=self.ntrip1_password
-                    )
-                    if not is_valid:
-                        return False, error_msg
-                    self.username = f"source_{mount_name}"
-                    return True, "Authentication successful"
-                else:
-                    return False, "Authentication required"
-
-            elif self.protocol_type == "ntrip1_0_http":
-                if auth_header.startswith("Basic "):
-                    return self._verify_basic_auth(mount, auth_header, request_type)
-                elif auth_header.startswith("Digest "):
-                    return self._verify_digest_auth(mount, auth_header, request_type)
-                else:
-                    if hasattr(self, "ntrip1_password") and self.ntrip1_password:
-                        is_valid, error_msg = self.db_manager.verify_mount_and_user(
-                            mount_name, mount_password=self.ntrip1_password, protocol_version="1.0"
-                        )
-                        if not is_valid:
-                            return False, error_msg
-                        self.username = f"http_{mount_name}"
-                        return True, "Authentication successful"
-                    return False, "Missing authorization"
-
-            elif self.protocol_type == "ntrip0_8":
-                if hasattr(self, "ntrip1_password") and self.ntrip1_password:
-                    is_valid, error_msg = self.db_manager.verify_mount_and_user(
-                        mount_name, mount_password=self.ntrip1_password, protocol_version="1.0"
-                    )
-                    if not is_valid:
-                        return False, error_msg
-                    self.username = f"ntrip08_{mount_name}"
-                    return True, "Authentication successful"
-                else:
-                    return False, "Authentication required"
-
-            elif self.protocol_type == "ntrip2_0":
-                if auth_header.startswith("Basic "):
-                    return self._verify_basic_auth(mount, auth_header, request_type)
-                elif auth_header.startswith("Digest "):
-                    return self._verify_digest_auth(mount, auth_header, request_type)
-                elif not auth_header and hasattr(self, "ntrip1_password") and self.ntrip1_password:
-                    is_valid, error_msg = self.db_manager.verify_mount_and_user(
-                        mount_name, mount_password=self.ntrip1_password, protocol_version="1.0"
-                    )
-                    if not is_valid:
-                        return False, error_msg
-                    self.username = f"ntrip20_{mount_name}"
-                    return True, "Authentication successful"
-                else:
-                    return False, "Invalid authorization format"
-
-            elif self.protocol_type == "rtsp":
-                if auth_header.startswith("Basic "):
-                    return self._verify_basic_auth(mount, auth_header, request_type)
-                elif auth_header.startswith("Digest "):
-                    return self._verify_digest_auth(mount, auth_header, request_type)
-                elif not auth_header and hasattr(self, "ntrip1_password") and self.ntrip1_password:
-                    is_valid, error_msg = self.db_manager.verify_mount_and_user(
-                        mount_name, mount_password=self.ntrip1_password, protocol_version="1.0"
-                    )
-                    if not is_valid:
-                        return False, error_msg
-                    self.username = f"rtsp_{mount_name}"
-                    return True, "Authentication successful"
-                else:
-                    return False, "Invalid authorization format"
-
+            # 1. Handle explicit auth headers (Basic/Digest)
+            if auth_header.startswith("Basic "):
+                success, msg = self._verify_basic_auth(mount_name, auth_header, request_type)
+                if not success: return False, msg
+            elif auth_header.startswith("Digest "):
+                success, msg = self._verify_digest_auth(mount_name, auth_header, request_type)
+                if not success: return False, msg
             else:
-                if not auth_header:
-                    return False, "Missing authorization"
-                if not auth_header.startswith("Basic "):
-                    return False, "Invalid authorization format"
-                encoded_credentials = auth_header[6:]
-                decoded_credentials = base64.b64decode(encoded_credentials).decode("utf-8")
-                if ":" not in decoded_credentials:
-                    return False, "Invalid credentials format"
-                username, password = decoded_credentials.split(":", 1)
-                self.username = username
-                is_valid, error_msg = self.db_manager.verify_mount_and_user(
-                    mount_name, username, password, mount_password=password, protocol_version="1.0"
-                )
-                if not is_valid:
-                    return False, error_msg
-                if connection.get_user_connection_count(username) >= config.settings.ntrip.max_connections_per_user:
+                success = False
+
+            if success:
+                # Common check for max connections per user
+                if connection.get_user_connection_count(self.username) >= config.settings.ntrip.max_connections_per_user:
                     return (
                         False,
                         f"User connection limit exceeded (max: {config.settings.ntrip.max_connections_per_user})",
                     )
                 return True, "Authentication successful"
+
+            # 2. Handle NTRIP 1.0 password in request line (already parsed into self.ntrip1_password)
+            if hasattr(self, "ntrip1_password") and self.ntrip1_password:
+                is_valid, error_msg = self.db_manager.verify_mount_and_user(
+                    mount_name, mount_password=self.ntrip1_password, protocol_version="1.0"
+                )
+                if not is_valid:
+                    return False, error_msg
+                self.username = f"{self.protocol_type}_{mount_name}"
+                return True, "Authentication successful"
+
+            # 3. Protocol specific defaults if no auth provided
+            if self.protocol_type == "ntrip1_0_http":
+                return False, "Missing authorization"
+            elif self.protocol_type == "ntrip2_0":
+                return False, "Invalid authorization format"
+            elif self.protocol_type == "rtsp":
+                return False, "Invalid authorization format"
+            elif self.protocol_type == "ntrip0_8":
+                return False, "Authentication required"
+            elif self.protocol_type == "ntrip1_0":
+                return False, "Authentication required"
+            else:
+                return False, "Missing authorization"
+
         except Exception as e:
             logger.log_error(f"User validation exception: {e}", exc_info=True)
             return False, "Authentication error"
@@ -839,6 +785,7 @@ class NTRIPHandler:
 
             if not is_valid:
                 log_warning(f"handle_upload authentication failed for {self.client_address}: {message}")
+                metrics.AUTH_ATTEMPTS.labels(status="failed", type="mount").inc()
                 self.send_auth_challenge(message)
                 try:
                     self.client_socket.close()
@@ -868,6 +815,8 @@ class NTRIPHandler:
                 log_error(f"Error adding mount point {mount} to connection manager: {e}", exc_info=True)
 
             self.send_upload_success_response()
+            metrics.AUTH_ATTEMPTS.labels(status="success", type="mount").inc()
+            metrics.ACTIVE_CONNECTIONS.labels(type="mount").inc()
             username_for_log = getattr(self, "username", mount)
             logger.log_mount_operation("upload_connected", mount, username_for_log)
             log_info(f"=== Starting to receive RTCM data for mount {mount} ===")
@@ -887,6 +836,7 @@ class NTRIPHandler:
             auth_header = next((v for k, v in headers.items() if k.lower() == "authorization"), "")
             is_valid, message = self.verify_user(mount, auth_header, "download")
             if not is_valid:
+                metrics.AUTH_ATTEMPTS.labels(status="failed", type="user").inc()
                 self.send_auth_challenge(message)
                 return
             if not self.db_manager.check_mount_exists_in_db(mount):
@@ -911,6 +861,8 @@ class NTRIPHandler:
                 self.send_error_response(500, "Failed to add client")
                 return
             self.send_download_success_response()
+            metrics.AUTH_ATTEMPTS.labels(status="success", type="user").inc()
+            metrics.ACTIVE_CONNECTIONS.labels(type="client").inc()
             logger.log_client_connect(self.username, mount, self.client_address[0], self.user_agent)
             self._keep_connection_alive()
         except Exception as e:
@@ -939,6 +891,7 @@ class NTRIPHandler:
                         log_debug(f"Mount point {mount} connection closed", "ntrip")
                         break
                     forwarder.upload_data(mount, data)
+                    metrics.DATA_THROUGHPUT.labels(mount=mount, direction="in").inc(len(data))
                     connection.get_connection_manager().update_mount_data_stats(mount, len(data))
                 except OSError:
                     log_debug(f"Mount point {mount} socket closed, stopping data reception", "ntrip")
@@ -957,6 +910,7 @@ class NTRIPHandler:
                     log_warning(f"Failed to clean up forwarder buffer: {e}", "ntrip")
                 try:
                     connection.get_connection_manager().remove_mount_connection(mount)
+                    metrics.ACTIVE_CONNECTIONS.labels(type="mount").dec()
                 except Exception as e:
                     log_warning(f"Failed to clean up mount connection: {e}")
                 logger.log_mount_operation("disconnected", mount)
@@ -985,6 +939,7 @@ class NTRIPHandler:
         finally:
             if hasattr(self, "client_info") and self.client_info:
                 forwarder.remove_client(self.client_info)
+                metrics.ACTIVE_CONNECTIONS.labels(type="client").dec()
                 logger.log_client_disconnect(self.username, self.mount, self.client_address[0])
 
     def _send_mount_list(self) -> None:
@@ -1249,11 +1204,13 @@ class NTRIPCaster:
                             f"Connection limit reached ({config.settings.network.max_connections}), "
                             f"rejecting {client_address}"
                         )
+                        metrics.TOTAL_CONNECTIONS.labels(type="client", status="rejected").inc()
                         client_socket.close()
                         self.rejected_connections += 1
                         continue
                 try:
                     self.connection_queue.put((client_socket, client_address), timeout=1.0)
+                    metrics.TOTAL_CONNECTIONS.labels(type="client", status="accepted").inc()
                     with self.connection_lock:
                         self.total_connections += 1
                     log_info(

@@ -13,10 +13,11 @@ from collections.abc import Callable
 from datetime import datetime
 from functools import wraps
 from threading import Thread
-from typing import Any
+from typing import Any, Optional
 
 from flask import (
     Flask,
+    Response,
     jsonify,
     redirect,
     render_template_string,
@@ -26,9 +27,15 @@ from flask import (
     url_for,
 )
 from flask_socketio import SocketIO, emit, join_room
+from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
+from sqlalchemy import select
+from authlib.integrations.flask_client import OAuth
+from flasgger import Swagger
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
-from . import config, connection, forwarder, logger
-from .database import DatabaseManager
+from . import config, connection, forwarder, logger, metrics
+from .database import DatabaseManager, db_session
+from .models import Admin
 from .forwarder import SimpleDataForwarder
 from .logger import log_error, log_info, log_system_event, log_warning, log_web_request
 from .rtcm2_manager import parser_manager as rtcm_manager
@@ -48,6 +55,12 @@ def get_server_instance() -> Any:
     return server_instance
 
 
+class User(UserMixin):
+    """Flask-Login User class"""
+    def __init__(self, id: int, username: str):
+        self.id = id
+        self.username = username
+
 class WebManager:
     """Web Manager"""
 
@@ -64,10 +77,41 @@ class WebManager:
         self.app = Flask(__name__, static_folder=self.static_dir, static_url_path="/static")
         self.app.secret_key = config.settings.security.secret_key
 
+        # Initialize Login Manager
+        self.login_manager = LoginManager()
+        self.login_manager.init_app(self.app)
+        self.login_manager.login_view = 'login'
+
+        @self.login_manager.user_loader
+        def load_user(user_id: str) -> Optional[User]:
+            with db_session() as session:
+                admin_data = session.execute(
+                    select(Admin.id, Admin.username).where(Admin.id == int(user_id))
+                ).first()
+                if admin_data:
+                    return User(admin_data.id, admin_data.username)
+            return None
+
+        # Initialize Swagger
+        self.swagger = Swagger(self.app)
+
+        # Initialize OAuth
+        self.oauth = OAuth(self.app)
+        if config.settings.security.oidc.enabled:
+            self.oauth.register(
+                name='oidc',
+                client_id=config.settings.security.oidc.client_id,
+                client_secret=config.settings.security.oidc.client_secret,
+                server_metadata_url=f"{config.settings.security.oidc.issuer}/.well-known/openid-configuration",
+                client_kwargs={
+                    'scope': config.settings.security.oidc.scope
+                }
+            )
+
         # Create SocketIO instance
         self.socketio = SocketIO(
             self.app,
-            async_mode="threading",
+            async_mode="gevent" if not config.settings.development.debug_mode else "threading",
             ping_timeout=config.settings.websocket.ping_timeout,
             ping_interval=config.settings.websocket.ping_interval,
         )
@@ -149,6 +193,9 @@ class WebManager:
         @self.app.route("/login", methods=["GET", "POST"])
         def login() -> Any:
             """Login page"""
+            if current_user.is_authenticated:
+                return redirect(url_for("index"))
+
             if request.method == "POST":
                 username = request.form.get("username", "").strip()
                 password = request.form.get("password", "").strip()
@@ -156,37 +203,59 @@ class WebManager:
                 if not username or not password:
                     return self._load_template("login.html", error="Username and password are required")
 
-                if not (2 <= len(username) <= 50):
-                    return self._load_template("login.html", error="Username must be between 2 and 50 characters")
-                if not (6 <= len(password) <= 100):
-                    return self._load_template("login.html", error="Password must be between 6 and 100 characters")
+                with db_session() as session_db:
+                    admin_data = session_db.execute(
+                        select(Admin.id, Admin.username).where(Admin.username == username)
+                    ).first()
+                    if admin_data and self.db_manager.verify_admin(username, password):
+                        user = User(admin_data.id, admin_data.username)
+                        login_user(user)
+                        redirect_page = request.args.get("redirect")
+                        if redirect_page in ["users", "mounts", "settings"]:
+                            return redirect(f"/?page={redirect_page}")
+                        return redirect(url_for("index"))
+                    else:
+                        return self._load_template("login.html", error="Invalid username or password")
 
-                valid, err = self._validate_alphanumeric(username, "Username")
-                if not valid:
-                    return self._load_template("login.html", error=err)
-                valid, err = self._validate_alphanumeric(password, "Password")
-                if not valid:
-                    return self._load_template("login.html", error=err)
-
-                if self.db_manager.verify_admin(username, password):
-                    session["admin_logged_in"] = True
-                    session["admin_username"] = username
-                    redirect_page = request.args.get("redirect")
-                    if redirect_page in ["users", "mounts", "settings"]:
-                        return redirect(f"/?page={redirect_page}")
-                    return redirect(url_for("index"))
-                else:
-                    return self._load_template("login.html", error="Invalid username or password")
-
-            return self._load_template("login.html")
+            return self._load_template("login.html", oidc_enabled=config.settings.security.oidc.enabled)
 
         @self.app.route("/logout", methods=["GET", "POST"])
         def logout() -> Any:
             """Logout"""
-            session.clear()
+            logout_user()
             if request.method == "POST":
                 return jsonify({"success": True})
             return redirect(url_for("login"))
+
+        @self.app.route("/oidc/login")
+        def oidc_login() -> Any:
+            """OIDC Login redirect"""
+            if not config.settings.security.oidc.enabled:
+                return redirect(url_for("login"))
+            redirect_uri = url_for('oidc_authorize', _external=True)
+            return self.oauth.oidc.authorize_redirect(redirect_uri)
+
+        @self.app.route("/oidc/authorize")
+        def oidc_authorize() -> Any:
+            """OIDC Authorization callback"""
+            if not config.settings.security.oidc.enabled:
+                return redirect(url_for("login"))
+            token = self.oauth.oidc.authorize_access_token()
+            userinfo = token.get('userinfo')
+            if userinfo:
+                username = userinfo.get('preferred_username') or userinfo.get('email')
+                if username:
+                    with db_session() as session_db:
+                        admin_data = session_db.execute(
+                            select(Admin.id, Admin.username).where(Admin.username == username)
+                        ).first()
+                        if admin_data:
+                            user = User(admin_data.id, admin_data.username)
+                            login_user(user)
+                            return redirect(url_for('index'))
+                        else:
+                            return self._load_template("login.html", error=f"User {username} not authorized as admin")
+            return redirect(url_for('login'))
 
         @self.app.route("/api/login", methods=["POST"])
         def api_login() -> Any:
@@ -199,23 +268,23 @@ class WebManager:
 
                 if not username or not password:
                     return jsonify({"error": "Username and password required"}), 400
-                if not (2 <= len(username) <= 50):
-                    return jsonify({"error": "Invalid username length"}), 400
-                if not (6 <= len(password) <= 100):
-                    return jsonify({"error": "Invalid password length"}), 400
 
-                if self.db_manager.verify_admin(username, password):
-                    session["admin_logged_in"] = True
-                    session["admin_username"] = username
-                    return jsonify({"success": True, "message": "Login successful", "token": "session_based"})
-                else:
-                    return jsonify({"error": "Invalid username or password"}), 401
+                with db_session() as session_db:
+                    admin_data = session_db.execute(
+                        select(Admin.id, Admin.username).where(Admin.username == username)
+                    ).first()
+                    if admin_data and self.db_manager.verify_admin(username, password):
+                        user = User(admin_data.id, admin_data.username)
+                        login_user(user)
+                        return jsonify({"success": True, "message": "Login successful", "token": "session_based"})
+                    else:
+                        return jsonify({"error": "Invalid username or password"}), 401
             except Exception as e:
                 log_error(f"API Login failed: {e}")
                 return jsonify({"error": "Login failed"}), 500
 
         @self.app.route("/api/mount_info/<mount>")
-        @self.require_login
+        @login_required
         def mount_info(mount: str) -> Any:
             """Get parsing info for a specific mount point"""
             parsed_data = rtcm_manager.get_parsed_mount_data(mount)
@@ -226,7 +295,7 @@ class WebManager:
                 return jsonify({"success": False, "message": "Mount point data does not exist or is not parsed"})
 
         @self.app.route("/api/system/restart", methods=["POST"])
-        @self.require_login
+        @login_required
         def restart_system() -> Any:
             """System restart API"""
             try:
@@ -243,7 +312,7 @@ class WebManager:
                 return jsonify({"success": False, "error": str(e)}), 500
 
         @self.app.route("/api/mount/<mount_name>/rtcm-parse/start", methods=["POST"])
-        @self.require_login
+        @login_required
         def api_start_rtcm_parsing(mount_name: str) -> Any:
             """Start real-time RTCM parsing for a mount point"""
             try:
@@ -265,7 +334,7 @@ class WebManager:
                 return jsonify({"error": str(e)}), 500
 
         @self.app.route("/api/mount/rtcm-parse/stop", methods=["POST"])
-        @self.require_login
+        @login_required
         def api_stop_rtcm_parsing() -> Any:
             """Stop all real-time RTCM parsing"""
             try:
@@ -277,7 +346,7 @@ class WebManager:
                 return jsonify({"error": str(e)}), 500
 
         @self.app.route("/api/mount/rtcm-parse/status", methods=["GET"])
-        @self.require_login
+        @login_required
         def api_get_rtcm_parsing_status() -> Any:
             """Get RTCM parser status info"""
             try:
@@ -306,7 +375,7 @@ class WebManager:
                 return jsonify({"error": str(e)}), 500
 
         @self.app.route("/api/users", methods=["GET", "POST"])
-        @self.require_login
+        @login_required
         def api_users() -> Any:
             """User management API"""
             if request.method == "GET":
@@ -353,7 +422,7 @@ class WebManager:
             return None
 
         @self.app.route("/api/users/<username>", methods=["PUT", "DELETE"])
-        @self.require_login
+        @login_required
         def api_user_detail(username: str) -> Any:
             """User detail API"""
             if request.method == "PUT":
@@ -406,7 +475,7 @@ class WebManager:
             return None
 
         @self.app.route("/api/mounts", methods=["GET", "POST"])
-        @self.require_login
+        @login_required
         def api_mounts() -> Any:
             """Mount point management API"""
             if request.method == "GET":
@@ -464,7 +533,7 @@ class WebManager:
             return None
 
         @self.app.route("/api/mounts/<mount_name>", methods=["PUT", "DELETE"])
-        @self.require_login
+        @login_required
         def api_mount_detail(mount_name: str) -> Any:
             """Mount point detail API"""
             if request.method == "PUT":
@@ -542,6 +611,32 @@ class WebManager:
                 log_error(f"Failed to get STR table: {e}")
                 return jsonify({"success": False, "error": str(e)}), 500
 
+        @self.app.route("/metrics")
+        def prometheus_metrics() -> Any:
+            """Expose Prometheus metrics"""
+            return Response(generate_latest(), mimetype=CONTENT_TYPE_LATEST)
+
+        @self.app.route("/health")
+        def health_check() -> Any:
+            """Health check endpoint"""
+            health_status = {"status": "healthy", "timestamp": time.time()}
+            try:
+                # Check DB connectivity
+                with db_session() as session:
+                    session.execute(select(1))
+                health_status["database"] = "connected"
+            except Exception as e:
+                health_status["status"] = "unhealthy"
+                health_status["database"] = f"error: {e!s}"
+
+            # Check if main services are running
+            server = get_server_instance()
+            if server:
+                health_status["ntrip_server"] = "running" if server.ntrip_caster and server.ntrip_caster.running else "stopped"
+
+            status_code = 200 if health_status["status"] == "healthy" else 503
+            return jsonify(health_status), status_code
+
     def _register_socketio_events(self) -> None:
         """Register SocketIO events"""
 
@@ -578,18 +673,6 @@ class WebManager:
                 log_error(f"Failed to handle system stats request: {e}")
                 emit("error", {"message": str(e)})
 
-    def require_login(self, f: Callable[..., Any]) -> Callable[..., Any]:
-        """Login decorator"""
-
-        @wraps(f)
-        def decorated_function(*args: Any, **kwargs: Any) -> Any:
-            if not session.get("admin_logged_in"):
-                if request.path.startswith("/api/"):
-                    return jsonify({"error": "Not logged in or session expired"}), 401
-                return redirect(url_for("login"))
-            return f(*args, **kwargs)
-
-        return decorated_function
 
     def start_rtcm_parsing(self) -> None:
         """Start real-time data push thread"""
@@ -647,12 +730,13 @@ class WebManager:
 
     def run(self, host: str | None = None, port: int | None = None, debug: bool | None = None) -> None:
         """Start Web server"""
+        is_debug = debug if debug is not None else config.settings.development.debug_mode
         self.socketio.run(
             self.app,
             host=host or config.settings.network.host,
             port=port or config.settings.web.port,
-            debug=debug if debug is not None else config.settings.development.debug_mode,
-            allow_unsafe_werkzeug=True,
+            debug=is_debug,
+            allow_unsafe_werkzeug=is_debug,
         )
 
 

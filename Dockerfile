@@ -74,7 +74,7 @@ EXPOSE 2101 5757
 
 # Healthcheck
 HEALTHCHECK --interval=30s --timeout=15s --start-period=90s --retries=3 \
-    CMD python /app/healthcheck.py || exit 1
+    CMD python healthcheck.py || exit 1
 
 # Entrypoint script
 RUN echo '#!/bin/bash\n\

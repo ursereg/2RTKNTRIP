@@ -4,17 +4,28 @@ version = "2.2.0"
 description = "High-performance NTRIP Caster with RTCM parsing"
 requires-python = ">=3.12"
 dependencies = [
+    "alembic>=1.18.3",
+    "authlib>=1.6.6",
+    "flasgger>=0.9.7.1",
     "flask==3.0.3",
+    "flask-login>=0.6.3",
     "flask-socketio==5.3.6",
+    "gevent>=25.9.1",
+    "gunicorn>=24.1.1",
+    "prometheus-client>=0.24.1",
     "psutil==5.9.5",
+    "psycopg2-binary>=2.9.11",
     "pydantic>=2.12.5",
     "pydantic-settings>=2.12.0",
     "pyproj>=3.6.1",
     "pyrtcm>=1.1.0",
     "python-socketio==5.8.0",
     "pyyaml>=6.0.3",
+    "requests>=2.32.5",
     "reverse-geocode>=1.6.0",
     "setuptools>=78.1.1",
+    "sqlalchemy>=2.0.46",
+    "structlog>=25.5.0",
     "werkzeug>=3.0.6",
 ]
 
