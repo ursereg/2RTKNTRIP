@@ -28,9 +28,45 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools]
 packages = ["ntrip_caster"]
 
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "I", "N", "UP", "PL", "RUF"]
+ignore = [
+    "PLR0913",
+    "PLR0912",
+    "PLR0915",
+    "PLR2004",
+    "PLR0911",
+    "PLC0415",
+    "PLW0603",
+    "E402",
+    "UP036",
+    "RUF059",
+    "E501",
+    "UP008",
+    "B007",
+    "PLR1714",
+    "E722",
+]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+ignore_missing_imports = true
+
 [dependency-groups]
 dev = [
+    "mypy",
+    "pre-commit",
     "pytest>=9.0.2",
     "pytest-mock>=3.15.1",
     "requests>=2.32.5",
+    "ruff",
+    "types-psutil",
+    "types-pyyaml",
+    "types-requests",
+    "types-setuptools",
 ]

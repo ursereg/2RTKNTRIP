@@ -1,15 +1,15 @@
-import pytest
-from ntrip_caster import database
-from ntrip_caster import config
+from ntrip_caster import config, database
 
-def test_hash_and_verify_password():
+
+def test_hash_and_verify_password() -> None:
     password = "test_password"
     hashed = database.hash_password(password)
     assert hashed != password
     assert database.verify_password(hashed, password)
     assert not database.verify_password(hashed, "wrong_password")
 
-def test_user_management(temp_db):
+
+def test_user_management(temp_db: str) -> None:
     username = "testuser"
     password = "testpassword"
 
@@ -35,6 +35,7 @@ def test_user_management(temp_db):
     # Verify new password
     db_manager = database.DatabaseManager()
     stored_hashed = db_manager.get_user_password(username)
+    assert stored_hashed is not None
     assert database.verify_password(stored_hashed, new_password)
 
     # Delete user
@@ -47,7 +48,8 @@ def test_user_management(temp_db):
     users = database.get_all_users()
     assert not any(u[1] == username for u in users)
 
-def test_mount_management(temp_db):
+
+def test_mount_management(temp_db: str) -> None:
     mount_name = "TESTMOUNT"
     mount_password = "mountpassword"
 
@@ -83,7 +85,8 @@ def test_mount_management(temp_db):
     # Verify deletion
     assert not db_manager.check_mount_exists_in_db(mount_name)
 
-def test_authentication_verification(temp_db):
+
+def test_authentication_verification(temp_db: str) -> None:
     username = "authuser"
     password = "authpassword"
     mount_name = "AUTHMOUNT"
@@ -99,7 +102,9 @@ def test_authentication_verification(temp_db):
     db_manager = database.DatabaseManager()
 
     # NTRIP 1.0 success (mount password)
-    success, message = db_manager.verify_mount_and_user(mount_name, mount_password=mount_password, protocol_version="1.0")
+    success, message = db_manager.verify_mount_and_user(
+        mount_name, mount_password=mount_password, protocol_version="1.0"
+    )
     assert success
 
     # NTRIP 1.0 failure (wrong mount password)
@@ -107,17 +112,23 @@ def test_authentication_verification(temp_db):
     assert not success
 
     # NTRIP 2.0 success (user credentials)
-    success, message = db_manager.verify_mount_and_user(mount_name, username=username, password=password, protocol_version="2.0")
+    success, message = db_manager.verify_mount_and_user(
+        mount_name, username=username, password=password, protocol_version="2.0"
+    )
     assert success
 
     # NTRIP 2.0 failure (wrong user password)
-    success, message = db_manager.verify_mount_and_user(mount_name, username=username, password="wrong", protocol_version="2.0")
+    success, message = db_manager.verify_mount_and_user(
+        mount_name, username=username, password="wrong", protocol_version="2.0"
+    )
     assert not success
 
     # NTRIP 2.0 failure (unbound user - if we had another user)
     other_user = "otheruser"
     database.add_user(other_user, "otherpass")
-    success, message = db_manager.verify_mount_and_user(mount_name, username=other_user, password="otherpass", protocol_version="2.0")
+    success, message = db_manager.verify_mount_and_user(
+        mount_name, username=other_user, password="otherpass", protocol_version="2.0"
+    )
     assert not success
     assert "User does not have access" in message
 
@@ -126,9 +137,10 @@ def test_authentication_verification(temp_db):
     assert success
 
     success, message = db_manager.verify_download_user(mount_name, other_user, "otherpass")
-    assert success # Download usually allows any valid user if mount exists
+    assert success  # Download usually allows any valid user if mount exists
 
-def test_admin_verification(temp_db):
+
+def test_admin_verification(temp_db: str) -> None:
     # Default admin from config
     assert database.verify_admin(config.settings.admin.username, config.settings.admin.password)
 
