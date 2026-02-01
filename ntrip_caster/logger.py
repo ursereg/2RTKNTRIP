@@ -8,6 +8,8 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Optional
 
+import structlog
+
 # Import configuration
 from . import config
 
@@ -50,12 +52,35 @@ class NTRIPLogger:
 
         formatter = logging.Formatter(config.settings.logging.log_format, datefmt="%Y-%m-%d %H:%M:%S")
 
+        # Configure structlog
+        processors: list[Any] = [
+            structlog.stdlib.add_log_level,
+            structlog.stdlib.add_logger_name,
+            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.processors.StackInfoRenderer(),
+            structlog.processors.format_exc_info,
+        ]
+
+        if config.settings.development.debug_mode:
+            processors.append(structlog.dev.ConsoleRenderer())
+        else:
+            processors.append(structlog.processors.JSONRenderer())
+
+        structlog.configure(
+            processors=processors,
+            context_class=dict,
+            logger_factory=structlog.stdlib.LoggerFactory(),
+            wrapper_class=structlog.stdlib.BoundLogger,
+            cache_logger_on_first_use=True,
+        )
+
         # Create different types of loggers
         self._create_logger("main", config.settings.logging.main_log_file, logging.INFO, formatter)
         self._create_logger("ntrip", config.settings.logging.ntrip_log_file, logging.DEBUG, formatter)
         self._create_logger("error", config.settings.logging.error_log_file, logging.ERROR, formatter)
 
         self._create_root_logger(formatter)
+        self.struct_logger = structlog.get_logger("ntrip")
 
     def _create_logger(self, name: str, filename: str, level: int, formatter: logging.Formatter) -> logging.Logger:
         """Create a specific type of logger"""
@@ -125,27 +150,27 @@ class NTRIPLogger:
             except Exception:
                 pass
 
-    def log_info(self, message: str, module: str = "main") -> None:
+    def log_info(self, message: str, module: str = "main", **kwargs: Any) -> None:
         """Log info message"""
         logger = self.get_logger(module)
-        logger.info(message)
+        logger.info(message, **kwargs)
         self._push_to_web(message, "info")
 
-    def log_debug(self, message: str, module: str = "main") -> None:
+    def log_debug(self, message: str, module: str = "main", **kwargs: Any) -> None:
         """Log debug message"""
         logger = self.get_logger(module)
-        logger.debug(message)
+        logger.debug(message, **kwargs)
 
-    def log_warning(self, message: str, module: str = "main") -> None:
+    def log_warning(self, message: str, module: str = "main", **kwargs: Any) -> None:
         """Log warning message"""
         logger = self.get_logger(module)
-        logger.warning(message)
+        logger.warning(message, **kwargs)
         self._push_to_web(message, "warning")
 
-    def log_error(self, message: str, module: str = "error", exc_info: Any = False) -> None:
+    def log_error(self, message: str, module: str = "error", exc_info: Any = False, **kwargs: Any) -> None:
         """Log error message"""
         logger = self.get_logger(module)
-        logger.error(message, exc_info=exc_info)
+        logger.error(message, exc_info=exc_info, **kwargs)
         self._push_to_web(message, "error")
 
     def log_critical(self, message: str, module: str = "error", exc_info: Any = False) -> None:
@@ -290,28 +315,28 @@ def set_web_instance(web_instance: Any) -> None:
     NTRIPLogger.set_web_instance(web_instance)
 
 
-def log_info(message: str, module: str = "main") -> None:
+def log_info(message: str, module: str = "main", **kwargs: Any) -> None:
     """Log info message"""
     logger_instance = init_logging()
-    logger_instance.log_info(message, module)
+    logger_instance.log_info(message, module, **kwargs)
 
 
-def log_debug(message: str, module: str = "main") -> None:
+def log_debug(message: str, module: str = "main", **kwargs: Any) -> None:
     """Log debug message"""
     logger_instance = init_logging()
-    logger_instance.log_debug(message, module)
+    logger_instance.log_debug(message, module, **kwargs)
 
 
-def log_warning(message: str, module: str = "main") -> None:
+def log_warning(message: str, module: str = "main", **kwargs: Any) -> None:
     """Log warning message"""
     logger_instance = init_logging()
-    logger_instance.log_warning(message, module)
+    logger_instance.log_warning(message, module, **kwargs)
 
 
-def log_error(message: str, module: str = "error", exc_info: Any = False) -> None:
+def log_error(message: str, module: str = "error", exc_info: Any = False, **kwargs: Any) -> None:
     """Log error message"""
     logger_instance = init_logging()
-    logger_instance.log_error(message, module, exc_info)
+    logger_instance.log_error(message, module, exc_info, **kwargs)
 
 
 def log_critical(message: str, module: str = "error", exc_info: Any = False) -> None:

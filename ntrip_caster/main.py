@@ -28,7 +28,7 @@ if args.config:
 # Import configuration and core modules
 from typing import Any
 
-from ntrip_caster import config, forwarder, logger
+from ntrip_caster import config, forwarder, logger, metrics
 from ntrip_caster.connection import get_connection_manager
 from ntrip_caster.database import DatabaseManager
 from ntrip_caster.ntrip import NTRIPCaster
@@ -108,6 +108,113 @@ def check_environment() -> None:
     env_logger.info("Environment check passed")
 
 
+class StatsMonitor:
+    """Separated stats monitoring logic"""
+    def __init__(self, service_manager: 'ServiceManager') -> None:
+        self.service_manager = service_manager
+        self.running = False
+        self.thread: Thread | None = None
+        self.interval = 10
+        self.last_network_stats: tuple[Any, float] | None = None
+        self.cache: dict[str, Any] = {}
+
+    def start(self) -> None:
+        self.running = True
+        self.thread = Thread(target=self._worker, daemon=True)
+        self.thread.start()
+
+    def stop(self) -> None:
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=2)
+
+    def _worker(self) -> None:
+        while self.running:
+            try:
+                time.sleep(self.interval)
+                if self.running:
+                    self.update_stats()
+            except Exception as e:
+                logger.log_error(f"Stats monitor exception: {e}", exc_info=True)
+
+    def update_stats(self) -> None:
+        try:
+            cpu_percent = psutil.cpu_percent(interval=1)
+            memory = psutil.virtual_memory()
+
+            # Update Prometheus metrics
+            metrics.SYSTEM_CPU_USAGE.set(cpu_percent)
+            metrics.SYSTEM_MEMORY_USAGE.labels(type="used").set(memory.used)
+            metrics.SYSTEM_MEMORY_USAGE.labels(type="total").set(memory.total)
+
+            network_stats = psutil.net_io_counters()
+            network_bandwidth = self._calculate_network_bandwidth(network_stats)
+
+            ntrip_stats = self.service_manager.ntrip_caster.get_performance_stats() if self.service_manager.ntrip_caster else {}
+            conn_manager = get_connection_manager()
+            conn_stats = conn_manager.get_statistics()
+
+            uptime = time.time() - self.service_manager.start_time if self.service_manager.start_time else 0
+            total_data_bytes = sum(
+                mount["total_bytes"] for mount in conn_stats.get("mounts", []) if "total_bytes" in mount
+            )
+
+            self.cache = {
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "uptime": uptime,
+                "cpu_percent": cpu_percent,
+                "memory": memory,
+                "network_bandwidth": network_bandwidth,
+                "ntrip_stats": ntrip_stats,
+                "conn_stats": conn_stats,
+                "total_data_mb": total_data_bytes / (1024 * 1024),
+            }
+        except Exception as e:
+            logger.log_error(f"Failed to update stats: {e}", exc_info=True)
+
+    def _calculate_network_bandwidth(self, current_stats: Any) -> str:
+        if self.last_network_stats is None:
+            self.last_network_stats = (current_stats, time.time())
+            return "Calculating..."
+
+        last_stats, last_time = self.last_network_stats
+        current_time = time.time()
+        time_diff = current_time - last_time
+
+        if time_diff <= 0: return "Calculating..."
+
+        upload_mbps = ((current_stats.bytes_sent - last_stats.bytes_sent) * 8) / (time_diff * 1024 * 1024)
+        download_mbps = ((current_stats.bytes_recv - last_stats.bytes_recv) * 8) / (time_diff * 1024 * 1024)
+        self.last_network_stats = (current_stats, current_time)
+        return f"↑{upload_mbps:.2f} Mbps ↓{download_mbps:.2f} Mbps"
+
+    def get_formatted_stats(self) -> dict[str, Any]:
+        if not self.cache:
+            self.update_stats()
+
+        stats = self.cache
+        memory_info = stats.get("memory")
+        network_info = stats.get("network_bandwidth", "")
+        return {
+            "timestamp": stats.get("timestamp"),
+            "uptime": stats.get("uptime", 0),
+            "cpu_percent": round(stats.get("cpu_percent", 0), 1),
+            "memory": {
+                "percent": round(getattr(memory_info, "percent", 0), 1),
+                "used": getattr(memory_info, "used", 0),
+                "total": getattr(memory_info, "total", 0),
+            },
+            "network_bandwidth": {"bandwidth_str": str(network_info)},
+            "connections": {
+                "active": stats.get("ntrip_stats", {}).get("active_connections", 0),
+                "total": stats.get("ntrip_stats", {}).get("total_connections", 0),
+                "rejected": stats.get("ntrip_stats", {}).get("rejected_connections", 0),
+            },
+            "mounts": stats.get("conn_stats", {}).get("mounts", {}),
+            "users": stats.get("conn_stats", {}).get("users", {}),
+            "data_transfer": {"total_bytes": stats.get("total_data_mb", 0) * 1024 * 1024},
+        }
+
 class ServiceManager:
     """Service Manager - Unifies management of all service components"""
 
@@ -118,13 +225,10 @@ class ServiceManager:
         self.web_thread: Thread | None = None
         self.ntrip_thread: Thread | None = None
         self.running: bool = False
-        self.stopping: bool = False  # Stop flag to prevent duplicate calls
+        self.stopping: bool = False
         self.start_time: float | None = None
-        self.stats_thread: Thread | None = None
-        self.stats_interval: int = 10  # Stats printing interval (seconds)
-        self.last_network_stats: tuple[Any, float] | None = None
-        self.print_stats: bool = False  # Control whether to print stats in console
-        self.system_stats_cache: dict[str, Any] = {}  # Cache system stats for Web API
+        self.stats_monitor = StatsMonitor(self)
+        self.print_stats: bool = False
 
     def start_all_services(self) -> None:
         """Start all services"""
@@ -163,8 +267,8 @@ class ServiceManager:
                 f"All services started - NTRIP port: {config.settings.ntrip.port}, Web port: {config.settings.web.port}"
             )
 
-            # Start stats monitor thread
-            self._start_stats_monitor()
+            # Start stats monitor
+            self.stats_monitor.start()
 
             # Main loop - Keep services running
             self._main_loop()
@@ -202,106 +306,9 @@ class ServiceManager:
             for url in web_urls:
                 logger.log_system_event(f"  - {url}")
 
-    def _start_stats_monitor(self) -> None:
-        """Start stats monitor thread"""
-        self.stats_thread = Thread(target=self._stats_monitor_worker, daemon=True)
-        self.stats_thread.start()
-
-    def _stats_monitor_worker(self) -> None:
-        """Stats monitor worker thread"""
-        while self.running:
-            try:
-                time.sleep(self.stats_interval)
-                if self.running:
-                    self._update_system_stats()
-            except Exception as e:
-                logger.log_error(f"Stats monitor exception: {e}", exc_info=True)
-
-    def _update_system_stats(self) -> None:
-        """Update system stats to cache"""
-        try:
-            # Get system performance data
-            cpu_percent = psutil.cpu_percent(interval=1)
-            memory = psutil.virtual_memory()
-
-            # Get network stats
-            network_stats = psutil.net_io_counters()
-            network_bandwidth = self._calculate_network_bandwidth(network_stats)
-
-            # Get NTRIP server stats
-            ntrip_stats = self.ntrip_caster.get_performance_stats() if self.ntrip_caster else {}
-
-            # Get connection manager stats
-            conn_manager = get_connection_manager()
-            conn_stats = conn_manager.get_statistics()
-
-            # Calculate uptime
-            uptime = time.time() - self.start_time if self.start_time else 0
-            uptime_str = self._format_uptime(uptime)
-
-            # Calculate data transfer stats
-            total_data_bytes = sum(
-                mount["total_bytes"] for mount in conn_stats.get("mounts", []) if "total_bytes" in mount
-            )
-            total_data_mb = total_data_bytes / (1024 * 1024)
-
-            # Update cache
-            self.system_stats_cache = {
-                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "uptime": uptime,  # Save numeric uptime
-                "uptime_str": uptime_str,  # Save formatted uptime string
-                "cpu_percent": cpu_percent,
-                "memory": memory,
-                "network_bandwidth": network_bandwidth,
-                "ntrip_stats": ntrip_stats,
-                "conn_stats": conn_stats,
-                "total_data_mb": total_data_mb,
-            }
-
-        except Exception as e:
-            logger.log_error(f"Failed to update stats: {e}", exc_info=True)
-
     def get_system_stats(self) -> dict[str, Any]:
         """Get system stats for Web API use"""
-        try:
-            stats = self.system_stats_cache.copy()
-            if not stats:
-                # If cache is empty, update once immediately
-                self._update_system_stats()
-                stats = self.system_stats_cache.copy()
-
-            # Format data for frontend use
-            if stats:
-                memory_info = stats.get("memory")
-                network_info = stats.get("network_bandwidth", {})
-
-                return {
-                    "timestamp": stats.get("timestamp"),
-                    "uptime": stats.get("uptime", 0),
-                    "cpu_percent": round(stats.get("cpu_percent", 0), 1),
-                    "memory": {
-                        "percent": round(getattr(memory_info, "percent", 0), 1),
-                        "used": getattr(memory_info, "used", 0),
-                        "total": getattr(memory_info, "total", 0),
-                    },
-                    "network_bandwidth": {
-                        "sent_rate": network_info.get("sent_rate", 0) if isinstance(network_info, dict) else 0,
-                        "recv_rate": network_info.get("recv_rate", 0) if isinstance(network_info, dict) else 0,
-                    },
-                    "connections": {
-                        "active": stats.get("ntrip_stats", {}).get("active_connections", 0),
-                        "total": stats.get("ntrip_stats", {}).get("total_connections", 0),
-                        "rejected": stats.get("ntrip_stats", {}).get("rejected_connections", 0),
-                        "max_concurrent": stats.get("ntrip_stats", {}).get("max_concurrent", 0),
-                    },
-                    "mounts": stats.get("conn_stats", {}).get("mounts", {}),
-                    "users": stats.get("conn_stats", {}).get("users", {}),
-                    "data_transfer": {"total_bytes": stats.get("total_data_mb", 0) * 1024 * 1024},
-                }
-            return {}
-        except Exception as e:
-            logger.log_error(f"Failed to get system stats: {e}", exc_info=True)
-            return {}
+        return self.stats_monitor.get_formatted_stats()
 
     def set_print_stats(self, enabled: bool) -> None:
         """Set whether to print stats in console"""
@@ -310,30 +317,6 @@ class ServiceManager:
             logger.log_system_event("Console statistics printing enabled")
         else:
             logger.log_system_event("Console statistics printing disabled")
-
-    def _calculate_network_bandwidth(self, current_stats: Any) -> str:
-        """Calculate network bandwidth"""
-        if self.last_network_stats is None:
-            self.last_network_stats = (current_stats, time.time())
-            return "Calculating..."
-
-        last_stats, last_time = self.last_network_stats
-        current_time = time.time()
-        time_diff = current_time - last_time
-
-        if time_diff <= 0:
-            return "Calculating..."
-
-        bytes_sent_diff = current_stats.bytes_sent - last_stats.bytes_sent
-        bytes_recv_diff = current_stats.bytes_recv - last_stats.bytes_recv
-
-        upload_mbps = (bytes_sent_diff * 8) / (time_diff * 1024 * 1024)
-        download_mbps = (bytes_recv_diff * 8) / (time_diff * 1024 * 1024)
-        total_mbps = upload_mbps + download_mbps
-
-        self.last_network_stats = (current_stats, current_time)
-
-        return f"↑{upload_mbps:.2f} Mbps ↓{download_mbps:.2f} Mbps (Total: {total_mbps:.2f} Mbps)"
 
     def _format_uptime(self, seconds: float) -> str:
         """Format uptime"""
@@ -391,10 +374,8 @@ class ServiceManager:
         try:
             self.running = False
 
-            # Wait for stats monitor thread to end
-            if self.stats_thread and self.stats_thread.is_alive():
-                logger.log_system_event("Stopping stats monitor thread")
-                self.stats_thread.join(timeout=2)
+            # Stop stats monitor
+            self.stats_monitor.stop()
 
             # Stop NTRIP server
             if self.ntrip_caster:

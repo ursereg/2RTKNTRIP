@@ -7,7 +7,7 @@ from collections import deque
 from threading import Lock, RLock
 from typing import Any
 
-from . import config, connection, logger
+from . import config, connection, logger, metrics
 
 
 class RingBuffer:
@@ -376,6 +376,7 @@ class SimpleDataForwarder:
 
                     self.stats["total_bytes_sent"] += bytes_sent
                     self.stats["total_messages_sent"] += len(new_data)
+                    metrics.DATA_THROUGHPUT.labels(mount=client_info["mount"], direction="out").inc(bytes_sent)
 
                     if client_info.get("connection_id"):
                         connection.update_user_activity(client_info["user"], client_info["connection_id"], bytes_sent)

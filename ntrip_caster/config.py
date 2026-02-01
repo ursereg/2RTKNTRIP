@@ -75,9 +75,19 @@ class WebConfig(BaseModel):
 
 # ==================== Database Configuration ====================
 class DatabaseConfig(BaseModel):
-    path: str = "2rtk.db"
+    url: str = "sqlite:///2rtk.db"
+    path: str = "2rtk.db"  # Legacy support
     pool_size: int = 10
     timeout: int = 30
+
+    @property
+    def connection_url(self) -> str:
+        """Get the database connection URL, prioritizing 'url' then 'path'"""
+        if self.url and not self.url.startswith("sqlite:///2rtk.db"):
+            return self.url
+        if self.path:
+            return f"sqlite:///{self.path}"
+        return self.url
 
 
 # ==================== Logging Configuration ====================
@@ -93,12 +103,24 @@ class LoggingConfig(BaseModel):
     log_frequent_status: bool = False
 
 
+class OIDCConfig(BaseModel):
+    """OIDC Configuration"""
+
+    enabled: bool = False
+    issuer: str = ""
+    client_id: str = ""
+    client_secret: str = ""
+    redirect_uri: str = ""
+    scope: str = "openid profile email"
+
+
 class SecurityConfig(BaseModel):
     """Password hash configuration and Flask Secret Key"""
 
     secret_key: str = "8f4a9c2e7d1b6f3a5e8d7c9b2a4f6e3d5c8b7a9f2e4d6c8b3a5f7e9d1c2b4a6"
     password_hash_rounds: int = 3
     session_timeout: int = 3600  # 1 hour
+    oidc: OIDCConfig = OIDCConfig()
 
 
 class AdminConfig(BaseModel):

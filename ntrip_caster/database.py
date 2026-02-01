@@ -2,9 +2,13 @@
 
 import hashlib
 import secrets
-import sqlite3
-from threading import Lock
-from typing import Any
+import threading
+from typing import Any, Optional, Generator
+from contextlib import contextmanager
+
+from sqlalchemy import create_engine, select, update, delete, or_
+from sqlalchemy.orm import sessionmaker, Session, scoped_session
+from sqlalchemy.engine import Engine
 
 from . import config
 from .logger import (
@@ -13,9 +17,57 @@ from .logger import (
     log_error,
     log_info,
 )
+from .models import Base, Admin, User, Mount
 
-db_lock = Lock()
+class Database:
+    _instance: Optional['Database'] = None
+    _lock = threading.Lock()
 
+    def __init__(self) -> None:
+        self.engine: Optional[Engine] = None
+        self.session_factory = None
+        self.db_session = None
+        self._current_url = None
+
+    @classmethod
+    def get_instance(cls) -> 'Database':
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = cls()
+        return cls._instance
+
+    def _get_engine(self) -> Engine:
+        url = config.settings.database.connection_url
+        if self.engine is None or self._current_url != url:
+            with self._lock:
+                # Double check after lock
+                if self.engine is None or self._current_url != url:
+                    self.engine = create_engine(
+                        url,
+                        pool_size=config.settings.database.pool_size,
+                        pool_pre_ping=True
+                    )
+                    self.session_factory = sessionmaker(bind=self.engine)
+                    self.db_session = scoped_session(self.session_factory)
+                    self._current_url = url
+        return self.engine
+
+    @contextmanager
+    def session_scope(self) -> Generator[Session, None, None]:
+        self._get_engine()
+        session = self.db_session()
+        try:
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+def db_session():
+    return Database.get_instance().session_scope()
 
 def hash_password(password: str, salt: str | None = None) -> str:
     """Hash password using PBKDF2 and SHA256"""
@@ -37,54 +89,23 @@ def verify_password(stored_password: str, provided_password: str) -> bool:
 
 
 def init_db() -> None:
-    """Initialize SQLite database schema"""
-    with db_lock:
-        conn = sqlite3.connect(config.settings.database.path)
-        c = conn.cursor()
+    """Initialize database schema"""
+    db = Database.get_instance()
+    engine = db._get_engine()
+    Base.metadata.create_all(engine)
 
-        # Admins table
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS admins (
-            id INTEGER PRIMARY KEY,
-            username TEXT NOT NULL UNIQUE,
-            password TEXT NOT NULL
-        )
-        """)
-
-        # Users table (NTRIP client users)
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY,
-            username TEXT NOT NULL UNIQUE,
-            password TEXT NOT NULL
-        )
-        """)
-
-        # Mount points table
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS mounts (
-            id INTEGER PRIMARY KEY,
-            mount TEXT NOT NULL UNIQUE,
-            password TEXT NOT NULL,
-            user_id INTEGER,
-            FOREIGN KEY (user_id) REFERENCES users(id)
-                ON DELETE SET NULL
-                ON UPDATE CASCADE
-        )
-        """)
-
-        c.execute("SELECT * FROM admins")
-        if not c.fetchone():
+    with db_session() as session:
+        admin = session.execute(select(Admin)).first()
+        if not admin:
             # Store default admin password with hash
             admin_username = config.settings.admin.username
             admin_password = config.settings.admin.password
             hashed_password = hash_password(admin_password)
-            c.execute("INSERT INTO admins (username, password) VALUES (?, ?)", (admin_username, hashed_password))
-            print(f"Default admin created: {admin_username}/{admin_password} (Please change after first login)")
+            new_admin = Admin(username=admin_username, password=hashed_password)
+            session.add(new_admin)
+            # session_scope will commit automatically
 
-        conn.commit()
-        conn.close()
-        log_info("Database initialization complete")
+    log_info("Database initialization complete")
 
 
 def verify_mount_and_user(
@@ -94,29 +115,16 @@ def verify_mount_and_user(
     mount_password: str | None = None,
     protocol_version: str = "1.0",
 ) -> tuple[bool, str]:
-    """Verify mount point and user information
-
-    Args:
-        mount: Mount point name
-        username: Username (optional)
-        password: Password (optional)
-        mount_password: Mount point password (optional)
-        protocol_version: NTRIP protocol version
-    """
-    with db_lock:
-        conn = sqlite3.connect(config.settings.database.path)
-        c = conn.cursor()
-
+    """Verify mount point and user information"""
+    with db_session() as session:
         try:
-            # Check if mount point exists and get info
-            c.execute("SELECT id, password, user_id FROM mounts WHERE mount = ?", (mount,))
-            mount_result = c.fetchone()
+            # Check if mount point exists
+            stmt = select(Mount).where(Mount.mount == mount)
+            mount_obj = session.execute(stmt).scalar_one_or_none()
 
-            if not mount_result:
+            if not mount_obj:
                 log_authentication(username or "unknown", mount, False, "database", "Mount point does not exist")
                 return False, "Mount point does not exist"
-
-            mount_id, stored_mount_password, bound_user_id = mount_result
 
             # Validation logic based on protocol version
             if protocol_version == "2.0":
@@ -127,21 +135,20 @@ def verify_mount_and_user(
                     return False, "NTRIP 2.0 requires username and password"
 
                 # Verify user exists
-                c.execute("SELECT id, password FROM users WHERE username = ?", (username,))
-                user_result = c.fetchone()
-                if not user_result:
+                user_stmt = select(User).where(User.username == username)
+                user_obj = session.execute(user_stmt).scalar_one_or_none()
+
+                if not user_obj:
                     log_authentication(username, mount, False, "database", "User does not exist")
                     return False, "User does not exist"
 
-                user_id, stored_user_password = user_result
-
                 # Verify user password
-                if not verify_password(stored_user_password, password):
+                if not verify_password(user_obj.password, password):
                     log_authentication(username, mount, False, "database", "Incorrect password")
                     return False, "Incorrect password"
 
                 # Verify if mount point is bound to this user
-                if bound_user_id is not None and bound_user_id != user_id:
+                if mount_obj.user_id is not None and mount_obj.user_id != user_obj.id:
                     log_authentication(
                         username, mount, False, "database", "User does not have access to this mount point"
                     )
@@ -159,7 +166,7 @@ def verify_mount_and_user(
                     return False, "NTRIP 1.0 requires mount point password"
 
                 # Verify mount point password
-                if stored_mount_password != mount_password:
+                if mount_obj.password != mount_password:
                     log_authentication(
                         username or "unknown", mount, False, "database", "Incorrect mount point password"
                     )
@@ -173,158 +180,125 @@ def verify_mount_and_user(
         except Exception as e:
             log_error(f"User authentication exception: {e}", exc_info=True)
             return False, f"Authentication exception: {e}"
-        finally:
-            conn.close()
 
 
 def add_user(username: str, password: str) -> tuple[bool, str]:
     """Add new user to database"""
-    with db_lock:
-        conn = sqlite3.connect(config.settings.database.path)
-        c = conn.cursor()
+    with db_session() as session:
         try:
             # Check if user already exists
-            c.execute("SELECT * FROM users WHERE username = ?", (username,))
-            if c.fetchone():
+            stmt = select(User).where(User.username == username)
+            if session.execute(stmt).first():
                 return False, "Username already exists"
 
             # Hash password and add user
             hashed_password = hash_password(password)
-            c.execute("INSERT INTO users (username, password) VALUES (?, ?)", (username, hashed_password))
-            conn.commit()
+            new_user = User(username=username, password=hashed_password)
+            session.add(new_user)
             log_database_operation("add_user", "users", True, f"User: {username}")
             return True, "User added successfully"
         except Exception as e:
             log_database_operation("add_user", "users", False, str(e))
             return False, f"Failed to add user: {e}"
-        finally:
-            conn.close()
 
 
 def update_user(user_id: int, username: str, password: str) -> tuple[bool, str]:
     """Update user information"""
-    with db_lock:
-        conn = sqlite3.connect(config.settings.database.path)
-        c = conn.cursor()
+    with db_session() as session:
         try:
             # Check for username conflict
-            c.execute("SELECT * FROM users WHERE username = ? AND id != ?", (username, user_id))
-            if c.fetchone():
+            stmt = select(User).where(User.username == username, User.id != user_id)
+            if session.execute(stmt).first():
                 return False, "Username already exists"
 
-            c.execute("SELECT password FROM users WHERE id = ?", (user_id,))
-            old_password = c.fetchone()[0]
+            user_obj = session.get(User, user_id)
+            if not user_obj:
+                return False, "User not found"
 
-            if "$" in old_password and verify_password(old_password, password):
-                new_password = old_password
+            if "$" in user_obj.password and verify_password(user_obj.password, password):
+                new_password = user_obj.password
             else:
                 new_password = hash_password(password)
 
-            c.execute("UPDATE users SET username = ?, password = ? WHERE id = ?", (username, new_password, user_id))
-            conn.commit()
+            user_obj.username = username
+            user_obj.password = new_password
             log_database_operation("update_user", "users", True, f"User: {username}")
             return True, "User updated successfully"
         except Exception as e:
             log_database_operation("update_user", "users", False, str(e))
             return False, f"Failed to update user: {e}"
-        finally:
-            conn.close()
 
 
 def delete_user(user_id: int) -> tuple[bool, str | bool]:
     """Delete user"""
-    with db_lock:
-        conn = sqlite3.connect(config.settings.database.path)
-        c = conn.cursor()
+    with db_session() as session:
         try:
-            c.execute("SELECT username FROM users WHERE id = ?", (user_id,))
-            result = c.fetchone()
-            if not result:
+            user_obj = session.get(User, user_id)
+            if not user_obj:
                 return False, "User does not exist"
 
-            username = result[0]
+            username = user_obj.username
 
             # Clear user_id for mount points bound to this user
-            c.execute("UPDATE mounts SET user_id = NULL WHERE user_id = ?", (user_id,))
-            affected_mounts = c.rowcount
+            session.execute(update(Mount).where(Mount.user_id == user_id).values(user_id=None))
 
-            # Delete user
-            c.execute("DELETE FROM users WHERE id = ?", (user_id,))
-            conn.commit()
+            session.delete(user_obj)
 
-            log_message = f"User: {username}"
-            if affected_mounts > 0:
-                log_message += f", cleared user binding for {affected_mounts} mount points"
-
-            log_database_operation("delete_user", "users", True, log_message)
+            log_database_operation("delete_user", "users", True, f"User: {username}")
             return True, username
         except Exception as e:
             log_database_operation("delete_user", "users", False, str(e))
             return False, f"Failed to delete user: {e}"
-        finally:
-            conn.close()
 
 
 def get_all_users() -> list[tuple[Any, ...]]:
     """Get all users list"""
-    with db_lock:
-        conn = sqlite3.connect(config.settings.database.path)
-        c = conn.cursor()
+    with db_session() as session:
         try:
-            c.execute("SELECT id, username, password FROM users")
-            return c.fetchall()
-        finally:
-            conn.close()
+            stmt = select(User.id, User.username, User.password)
+            results = session.execute(stmt).all()
+            return [tuple(row) for row in results]
+        except Exception:
+            return []
 
 
 def update_user_password(username: str, new_password: str) -> tuple[bool, str]:
     """Update user password"""
-    with db_lock:
-        conn = sqlite3.connect(config.settings.database.path)
-        c = conn.cursor()
+    with db_session() as session:
         try:
-            c.execute("SELECT id FROM users WHERE username = ?", (username,))
-            result = c.fetchone()
-            if not result:
+            stmt = select(User).where(User.username == username)
+            user_obj = session.execute(stmt).scalar_one_or_none()
+            if not user_obj:
                 return False, "User does not exist"
 
-            hashed_password = hash_password(new_password)
-            c.execute("UPDATE users SET password = ? WHERE username = ?", (hashed_password, username))
-            conn.commit()
+            user_obj.password = hash_password(new_password)
             log_info(f"Password updated successfully for user {username}")
             return True, "Password updated successfully"
         except Exception as e:
             log_error(f"Failed to update user password: {e}")
             return False, f"Failed to update password: {e}"
-        finally:
-            conn.close()
 
 
 def add_mount(mount: str, password: str, user_id: int | None = None) -> tuple[bool, str]:
     """Add new mount point"""
-    with db_lock:
-        conn = sqlite3.connect(config.settings.database.path)
-        c = conn.cursor()
+    with db_session() as session:
         try:
-            c.execute("SELECT * FROM mounts WHERE mount = ?", (mount,))
-            if c.fetchone():
+            stmt = select(Mount).where(Mount.mount == mount)
+            if session.execute(stmt).first():
                 return False, "Mount point name already exists"
 
             # Verify user exists if user_id is specified
             if user_id is not None:
-                c.execute("SELECT id FROM users WHERE id = ?", (user_id,))
-                if not c.fetchone():
+                if not session.get(User, user_id):
                     return False, "Specified user does not exist"
 
-            c.execute("INSERT INTO mounts (mount, password, user_id) VALUES (?, ?, ?)", (mount, password, user_id))
-            conn.commit()
+            new_mount = Mount(mount=mount, password=password, user_id=user_id)
+            session.add(new_mount)
             log_database_operation("add_mount", "mounts", True, f"Mount: {mount}, User ID: {user_id}")
             return True, "Mount point added successfully"
         except Exception as e:
             log_database_operation("add_mount", "mounts", False, str(e))
             return False, f"Failed to add mount point: {e}"
-        finally:
-            conn.close()
 
 
 def update_mount(
@@ -334,122 +308,94 @@ def update_mount(
     user_id: int | str | None = None,
 ) -> tuple[bool, str]:
     """Update mount point information"""
-    with db_lock:
-        conn = sqlite3.connect(config.settings.database.path)
-        c = conn.cursor()
+    with db_session() as session:
         try:
-            c.execute("SELECT mount, password, user_id FROM mounts WHERE id = ?", (mount_id,))
-            result = c.fetchone()
-            if not result:
+            mount_obj = session.get(Mount, mount_id)
+            if not mount_obj:
                 return False, "Mount point does not exist"
 
-            old_mount, old_password, old_user_id = result
-            new_mount = mount if mount is not None else old_mount
-            new_password = password if password is not None else old_password
-            new_user_id = user_id if user_id != "keep_current" else old_user_id
+            old_mount = mount_obj.mount
 
-            # Check for name conflict
             if mount is not None and mount != old_mount:
-                c.execute("SELECT * FROM mounts WHERE mount = ? AND id != ?", (mount, mount_id))
-                if c.fetchone():
+                stmt = select(Mount).where(Mount.mount == mount, Mount.id != mount_id)
+                if session.execute(stmt).first():
                     return False, "Mount point name already exists"
+                mount_obj.mount = mount
 
-            # Verify user exists
-            if new_user_id is not None:
-                c.execute("SELECT id FROM users WHERE id = ?", (new_user_id,))
-                if not c.fetchone():
-                    return False, "Specified user does not exist"
+            if password is not None:
+                mount_obj.password = password
 
-            c.execute(
-                "UPDATE mounts SET mount = ?, password = ?, user_id = ? WHERE id = ?",
-                (new_mount, new_password, new_user_id, mount_id),
-            )
-            conn.commit()
-            log_database_operation("update_mount", "mounts", True, f"Mount: {old_mount} -> {new_mount}")
+            if user_id != "keep_current":
+                if user_id is not None:
+                    if not session.get(User, user_id):
+                        return False, "Specified user does not exist"
+                mount_obj.user_id = user_id
+
+            log_database_operation("update_mount", "mounts", True, f"Mount: {old_mount} -> {mount_obj.mount}")
             return True, old_mount
         except Exception as e:
             log_database_operation("update_mount", "mounts", False, str(e))
             return False, f"Failed to update mount point: {e}"
-        finally:
-            conn.close()
 
 
 def delete_mount(mount_id: int) -> tuple[bool, str]:
     """Delete mount point"""
-    with db_lock:
-        conn = sqlite3.connect(config.settings.database.path)
-        c = conn.cursor()
+    with db_session() as session:
         try:
-            c.execute("SELECT mount FROM mounts WHERE id = ?", (mount_id,))
-            result = c.fetchone()
-            if not result:
+            mount_obj = session.get(Mount, mount_id)
+            if not mount_obj:
                 return False, "Mount point does not exist"
 
-            mount = result[0]
-            c.execute("DELETE FROM mounts WHERE id = ?", (mount_id,))
-            conn.commit()
-            log_database_operation("delete_mount", "mounts", True, f"Mount: {mount}")
-            return True, mount
+            mount_name = mount_obj.mount
+            session.delete(mount_obj)
+            log_database_operation("delete_mount", "mounts", True, f"Mount: {mount_name}")
+            return True, mount_name
         except Exception as e:
             log_database_operation("delete_mount", "mounts", False, str(e))
             return False, f"Failed to delete mount point: {e}"
-        finally:
-            conn.close()
 
 
 def get_all_mounts() -> list[tuple[Any, ...]]:
     """Get all mount points list"""
-    with db_lock:
-        conn = sqlite3.connect(config.settings.database.path)
-        c = conn.cursor()
+    with db_session() as session:
         try:
-            c.execute("PRAGMA table_info(mounts)")
-            columns = [column[1] for column in c.fetchall()]
-
-            if "lat" in columns and "lon" in columns:
-                c.execute("""SELECT m.id, m.mount, m.password, m.user_id, u.username, m.lat, m.lon
-                             FROM mounts m 
-                             LEFT JOIN users u ON m.user_id = u.id""")
-            else:
-                c.execute("""SELECT m.id, m.mount, m.password, m.user_id, u.username, NULL as lat, NULL as lon
-                             FROM mounts m 
-                             LEFT JOIN users u ON m.user_id = u.id""")
-            return c.fetchall()
-        finally:
-            conn.close()
+            stmt = select(
+                Mount.id, Mount.mount, Mount.password, Mount.user_id, User.username, Mount.lat, Mount.lon
+            ).outerjoin(User, Mount.user_id == User.id)
+            results = session.execute(stmt).all()
+            return [tuple(row) for row in results]
+        except Exception:
+            return []
 
 
 def verify_admin(username: str, password: str) -> bool:
     """Verify admin credentials"""
-    with db_lock:
-        conn = sqlite3.connect(config.settings.database.path)
-        c = conn.cursor()
+    with db_session() as session:
         try:
-            c.execute("SELECT password FROM admins WHERE username = ?", (username,))
-            result = c.fetchone()
-            if result and verify_password(result[0], password):
+            stmt = select(Admin).where(Admin.username == username)
+            admin_obj = session.execute(stmt).scalar_one_or_none()
+            if admin_obj and verify_password(admin_obj.password, password):
                 return True
             return False
-        finally:
-            conn.close()
+        except Exception:
+            return False
 
 
 def update_admin_password(username: str, new_password: str) -> bool:
     """Update admin password"""
-    with db_lock:
-        conn = sqlite3.connect(config.settings.database.path)
-        c = conn.cursor()
+    with db_session() as session:
         try:
-            hashed_password = hash_password(new_password)
-            c.execute("UPDATE admins SET password = ? WHERE username = ?", (hashed_password, username))
-            conn.commit()
+            stmt = select(Admin).where(Admin.username == username)
+            admin_obj = session.execute(stmt).scalar_one_or_none()
+            if not admin_obj:
+                return False
+
+            admin_obj.password = hash_password(new_password)
             log_database_operation("update_admin_password", "admins", True, f"Admin: {username}")
             return True
         except Exception as e:
             log_database_operation("update_admin_password", "admins", False, str(e))
             return False
-        finally:
-            conn.close()
 
 
 class DatabaseManager:
@@ -483,17 +429,12 @@ class DatabaseManager:
 
     def delete_user(self, username: str) -> tuple[bool, str | bool]:
         """Delete user"""
-        users = get_all_users()
-        user_id = None
-        for user in users:
-            if user[1] == username:
-                user_id = user[0]
-                break
-
-        if user_id is None:
-            return False, "User does not exist"
-
-        return delete_user(user_id)
+        with db_session() as session:
+            stmt = select(User).where(User.username == username)
+            user_obj = session.execute(stmt).scalar_one_or_none()
+            if not user_obj:
+                return False, "User does not exist"
+            return delete_user(user_obj.id)
 
     def get_all_users(self) -> list[tuple[Any, ...]]:
         """Get all users"""
@@ -501,39 +442,32 @@ class DatabaseManager:
 
     def get_user_password(self, username: str) -> str | None:
         """Get user password, used for Digest authentication"""
-        with sqlite3.connect(config.settings.database.path) as conn:
-            c = conn.cursor()
-            c.execute("SELECT password FROM users WHERE username = ?", (username,))
-            result = c.fetchone()
-            return result[0] if result else None
+        with db_session() as session:
+            stmt = select(User.password).where(User.username == username)
+            result = session.execute(stmt).scalar_one_or_none()
+            return result
 
     def check_mount_exists_in_db(self, mount: str) -> bool:
         """Check if mount point exists in database"""
-        with sqlite3.connect(config.settings.database.path) as conn:
-            c = conn.cursor()
-            c.execute("SELECT id FROM mounts WHERE mount = ?", (mount,))
-            return c.fetchone() is not None
+        with db_session() as session:
+            stmt = select(Mount.id).where(Mount.mount == mount)
+            return session.execute(stmt).first() is not None
 
     def verify_download_user(self, mount: str, username: str, password: str) -> tuple[bool, str]:
         """Verify download user, checks username/password, ignores_binding"""
-        with sqlite3.connect(config.settings.database.path) as conn:
-            c = conn.cursor()
-
-            c.execute("SELECT id FROM mounts WHERE mount = ?", (mount,))
-            mount_result = c.fetchone()
-            if not mount_result:
+        with db_session() as session:
+            stmt = select(Mount.id).where(Mount.mount == mount)
+            if not session.execute(stmt).first():
                 log_authentication(username, mount, False, "database", "Mount point does not exist")
                 return False, "Mount point does not exist"
 
-            c.execute("SELECT id, password FROM users WHERE username = ?", (username,))
-            user_result = c.fetchone()
-            if not user_result:
+            user_stmt = select(User).where(User.username == username)
+            user_obj = session.execute(user_stmt).scalar_one_or_none()
+            if not user_obj:
                 log_authentication(username, mount, False, "database", "User does not exist")
                 return False, "User does not exist"
 
-            user_id, stored_password = user_result
-
-            if not verify_password(stored_password, password):
+            if not verify_password(user_obj.password, password):
                 log_authentication(username, mount, False, "database", "Incorrect password")
                 return False, "Incorrect password"
 
@@ -546,20 +480,17 @@ class DatabaseManager:
 
     def update_mount_password(self, mount: str, new_password: str) -> tuple[bool, str]:
         """Update mount point password"""
-        with db_lock:
-            conn = sqlite3.connect(config.settings.database.path)
-            c = conn.cursor()
+        with db_session() as session:
             try:
-                c.execute("UPDATE mounts SET password = ? WHERE mount = ?", (new_password, mount))
-                if c.rowcount > 0:
-                    conn.commit()
+                stmt = select(Mount).where(Mount.mount == mount)
+                mount_obj = session.execute(stmt).scalar_one_or_none()
+                if mount_obj:
+                    mount_obj.password = new_password
                     return True, "Mount point password updated successfully"
                 else:
                     return False, "Mount point does not exist"
             except Exception as e:
                 return False, f"Failed to update mount point password: {e!s}"
-            finally:
-                conn.close()
 
     def update_user(self, user_id: int, username: str, password: str) -> tuple[bool, str]:
         """Update user info"""
@@ -577,17 +508,12 @@ class DatabaseManager:
 
     def delete_mount(self, mount: str) -> tuple[bool, str]:
         """Delete mount point"""
-        mounts = self.get_all_mounts()
-        mount_id = None
-        for m in mounts:
-            if m[1] == mount:
-                mount_id = m[0]
-                break
-
-        if mount_id is None:
-            return False, "Mount point does not exist"
-
-        return delete_mount(mount_id)
+        with db_session() as session:
+            stmt = select(Mount).where(Mount.mount == mount)
+            mount_obj = session.execute(stmt).scalar_one_or_none()
+            if not mount_obj:
+                return False, "Mount point does not exist"
+            return delete_mount(mount_obj.id)
 
     def get_all_mounts(self) -> list[tuple[Any, ...]]:
         """Get all mount points"""
